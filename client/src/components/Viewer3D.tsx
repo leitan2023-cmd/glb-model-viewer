@@ -24,6 +24,7 @@ export interface Viewer3DInstance {
   fitToObject: (object: THREE.Object3D) => void;
   fitToObjectSmooth: (object: THREE.Object3D, duration?: number) => void;
   resetView: () => void;
+  generateThumbnail: (width?: number, height?: number) => Promise<string>;
   dispose: () => void;
 }
 
@@ -128,6 +129,33 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, sceneTree, onReady, onPickOb
       },
       resetView: () => {
         cameraManager.resetView({ duration: 400 });
+      },
+      generateThumbnail: async (width: number = 256, height: number = 256) => {
+        const originalWidth = renderer.domElement.width;
+        const originalHeight = renderer.domElement.height;
+        const originalPixelRatio = renderer.getPixelRatio();
+        try {
+          renderer.setSize(width, height);
+          renderer.setPixelRatio(1);
+          if (camera instanceof THREE.PerspectiveCamera) {
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+          }
+          renderer.render(mainScene, camera);
+          const dataUrl = renderer.domElement.toDataURL('image/png');
+          return dataUrl;
+        } catch (error) {
+          console.error('Failed to generate thumbnail:', error);
+          return '';
+        } finally {
+          renderer.setSize(originalWidth, originalHeight);
+          renderer.setPixelRatio(originalPixelRatio);
+          if (camera instanceof THREE.PerspectiveCamera) {
+            camera.aspect = originalWidth / originalHeight;
+            camera.updateProjectionMatrix();
+          }
+          renderer.render(mainScene, camera);
+        }
       },
       dispose: () => {
         renderer.dispose();

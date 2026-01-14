@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { RotateCcw, Maximize2, X, Eye, EyeOff } from 'lucide-react';
+import { RotateCcw, Maximize2, X, Eye, EyeOff, Upload } from 'lucide-react';
 import Viewer3D, { Viewer3DInstance } from '@/components/Viewer3D';
 import { PickResult } from '@/lib/pickingUtils';
 import SceneTree from '@/components/SceneTree';
@@ -13,9 +13,12 @@ import NodeInfoPanel from '@/components/NodeInfoPanel';
 import ModelStats from '@/components/ModelStats';
 import AdvancedPanel from '@/components/AdvancedPanel';
 import PickDebugHUD, { PickDebugState } from '@/components/PickDebugHUD';
+import ModelHistory from '@/components/ModelHistory';
 import { loadGLB, LoadProgress } from '@/lib/glbLoader';
 import { generateSceneTree, TreeNode, getNodePath, findNodeById } from '@/lib/sceneGraph';
 import { SelectionManager } from '@/lib/selectionManager';
+import { disposeOldModel, calculateModelStats, ModelStats as ModelStatsType } from '@/lib/modelManager';
+import { saveModelToHistory } from '@/lib/historyManager';
 
 export default function Home() {
   const [loadedScene, setLoadedScene] = useState<THREE.Group | null>(null);
@@ -36,6 +39,8 @@ export default function Home() {
     hitUUID: '',
     mappedTreeId: '',
   });
+  const [modelStats, setModelStats] = useState<ModelStatsType | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   const viewerRef = useRef<Viewer3DInstance | null>(null);
   const selectionManagerRef = useRef<SelectionManager | null>(null);
@@ -43,10 +48,10 @@ export default function Home() {
   const sceneTreeRef = useRef<TreeNode | null>(null);
   const loadedSceneRef = useRef<THREE.Group | null>(null);
 
-  const handleFileSelected = useCallback(async (file: File) => {
-    setIsLoading(true);
-    setLoadProgress(0);
-
+  /**
+   * 内部：加载模型的核心逻辑
+   */
+  const loadModelInternal = useCallback(async (file: File) => {
     try {
       const result = await loadGLB(file, (progress: LoadProgress) => {
         setLoadProgress(progress.percentage);
@@ -68,12 +73,52 @@ export default function Home() {
       // 更新拾取管理器中的场景树
       if (viewerRef.current) {
         viewerRef.current.pickingManager.setScene(result.scene, tree);
+        // 重新聚焦到模型
+        viewerRef.current.fitToModel();
       }
+
+      // 计算模型统计信息
+      const stats = calculateModelStats(result.scene, file.size, file.name);
+      setModelStats(stats);
 
       // 清除选择
       setSelectedNodeIds(new Set());
       setSelectedNode(null);
       setExpandedNodeIds(new Set());
+
+      return stats;
+    } catch (error) {
+      console.error('加载失败:', error);
+      throw error;
+    }
+  }, []);
+
+  /**
+   * 处理文件选择（初次加载或替换）
+   */
+  const handleFileSelected = useCallback(async (file: File) => {
+    setIsLoading(true);
+    setLoadProgress(0);
+
+    try {
+      // 清理旧模型
+      if (loadedSceneRef.current) {
+        disposeOldModel(loadedSceneRef.current);
+      }
+
+      // 加载新模型
+      const stats = await loadModelInternal(file);
+
+      // 生成缩略图并保存到历史记录
+      try {
+        let thumbDataUrl = '';
+        if (viewerRef.current) {
+          thumbDataUrl = await viewerRef.current.generateThumbnail(256, 256);
+        }
+        await saveModelToHistory(file, stats, thumbDataUrl);
+      } catch (historyError) {
+        console.warn('Failed to save to history:', historyError);
+      }
 
       toast.success(`成功加载模型: ${file.name}`);
     } catch (error) {
@@ -83,7 +128,7 @@ export default function Home() {
       setIsLoading(false);
       setLoadProgress(0);
     }
-  }, []);
+  }, [loadModelInternal]);
 
   /**
    * 处理节点选择（来自结构树）
@@ -224,6 +269,19 @@ export default function Home() {
     }
   }, []);
 
+  const handleUploadClick = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.glb,.gltf';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        handleFileSelected(file);
+      }
+    };
+    input.click();
+  }, [handleFileSelected]);
+
   return (
     <div className="w-screen h-screen flex flex-col bg-background">
       {/* Debug HUD */}
@@ -233,6 +291,17 @@ export default function Home() {
       <div className="h-16 bg-card border-b border-border flex items-center px-4 gap-3">
         <h1 className="text-lg font-bold text-foreground">GLB Model Viewer</h1>
         <Separator orientation="vertical" className="h-6" />
+
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleUploadClick}
+          disabled={isLoading}
+          title="上传新模型"
+        >
+          <Upload className="w-4 h-4 mr-2" />
+          上传模型
+        </Button>
 
         {loadedScene && (
           <>
@@ -299,18 +368,52 @@ export default function Home() {
             </div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-              <div
-                ref={treeContainerRef}
-                className="flex-1 overflow-y-auto"
-              >
-                <SceneTree
-                  root={sceneTree}
-                  selectedNodeIds={selectedNodeIds}
-                  expandedNodeIds={expandedNodeIds}
-                  onSelectNode={handleSelectNode}
-                  onToggleExpanded={handleToggleNodeExpanded}
-                />
+              {/* 标签页：结构树 / 历史模型 */}
+              <div className="flex border-b border-border bg-background/50">
+                <button
+                  onClick={() => setShowHistory(false)}
+                  className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                    !showHistory
+                      ? 'text-accent border-b-2 border-accent'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  结构树
+                </button>
+                <button
+                  onClick={() => setShowHistory(true)}
+                  className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                    showHistory
+                      ? 'text-accent border-b-2 border-accent'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  历史模型
+                </button>
               </div>
+
+              {/* 内容区域 */}
+              {!showHistory ? (
+                <div
+                  ref={treeContainerRef}
+                  className="flex-1 overflow-y-auto"
+                >
+                  <SceneTree
+                    root={sceneTree}
+                    selectedNodeIds={selectedNodeIds}
+                    expandedNodeIds={expandedNodeIds}
+                    onSelectNode={handleSelectNode}
+                    onToggleExpanded={handleToggleNodeExpanded}
+                  />
+                </div>
+              ) : (
+                <div className="flex-1 overflow-hidden">
+                  <ModelHistory
+                    onLoadModel={handleFileSelected}
+                    isLoading={isLoading}
+                  />
+                </div>
+              )}
               <div className="border-t border-border p-4 space-y-3 bg-background/50 max-h-96 overflow-y-auto">
                 <ModelStats scene={loadedScene} />
                 {selectedNode && <NodeInfoPanel node={selectedNode} />}
