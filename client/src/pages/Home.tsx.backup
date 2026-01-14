@@ -242,39 +242,6 @@ export default function Home() {
    * 处理 3D 中的拾取
    */
   const handlePickObject = useCallback((pickResult: PickResult | null, debugInfo?: any) => {
-    // 运维模式：创建事件
-    if (maintenanceMode && pickResult) {
-      const stableKey = mvpManagerRef.current?.getStableKey(pickResult.mesh);
-      if (stableKey) {
-        setEventEditorData({
-          type: 'bearing',
-          title: '',
-          targetKey: stableKey,
-          targetName: pickResult.node?.name || pickResult.mesh.name,
-          points: [pickResult.point],
-          fields: {},
-          attachments: [],
-        });
-        setEventEditorOpen(true);
-      }
-      return;
-    }
-
-    // 量测模式：添加测量点
-    if (measureMode && pickResult) {
-      mvpManagerRef.current?.addMeasurePoint(
-        pickResult.point,
-        debugInfo?.lastNDCX || 0,
-        debugInfo?.lastNDCY || 0
-      );
-      if (mvpManagerRef.current?.getMeasurePointCount() === 2) {
-        setMeasureMode(false);
-        toast.success('测量完成');
-      }
-      return;
-    }
-
-    // 普通模式：选择构件
     console.log('[Home] handlePickObject called with result:', pickResult);
     
     // 更新 Debug HUD
@@ -408,27 +375,6 @@ export default function Home() {
                 清除选择
               </Button>
             )}
-
-            {loadedScene && (
-              <>
-                <Button
-                  size="sm"
-                  variant={maintenanceMode ? 'default' : 'outline'}
-                  onClick={() => setMaintenanceMode(!maintenanceMode)}
-                  title="运维模式：点击模型创建事件"
-                >
-                  🔧 运维模式
-                </Button>
-                <Button
-                  size="sm"
-                  variant={measureMode ? 'default' : 'outline'}
-                  onClick={() => setMeasureMode(!measureMode)}
-                  title="量测模式：点击两处测量距离"
-                >
-                  📏 量测
-                </Button>
-              </>
-            )}
           </>
         )}
 
@@ -461,12 +407,12 @@ export default function Home() {
             </div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-              {/* 标签页：结构树 / 历史模型 / 事件记录 */}
+              {/* 标签页：结构树 / 历史模型 */}
               <div className="flex border-b border-border bg-background/50">
                 <button
-                  onClick={() => { setShowHistory(false); setShowEventTab(false); }}
+                  onClick={() => setShowHistory(false)}
                   className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                    !showHistory && !showEventTab
+                    !showHistory
                       ? 'text-accent border-b-2 border-accent'
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
@@ -474,29 +420,19 @@ export default function Home() {
                   结构树
                 </button>
                 <button
-                  onClick={() => { setShowHistory(true); setShowEventTab(false); }}
+                  onClick={() => setShowHistory(true)}
                   className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                    showHistory && !showEventTab
+                    showHistory
                       ? 'text-accent border-b-2 border-accent'
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
                   历史模型
                 </button>
-                <button
-                  onClick={() => { setShowHistory(false); setShowEventTab(true); }}
-                  className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                    showEventTab
-                      ? 'text-accent border-b-2 border-accent'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  事件记录
-                </button>
               </div>
 
               {/* 内容区域 */}
-              {!showHistory && !showEventTab ? (
+              {!showHistory ? (
                 <div
                   ref={treeContainerRef}
                   className="flex-1 overflow-y-auto"
@@ -509,44 +445,12 @@ export default function Home() {
                     onToggleExpanded={handleToggleNodeExpanded}
                   />
                 </div>
-              ) : showHistory ? (
+              ) : (
                 <div className="flex-1 overflow-hidden">
                   <ModelHistory
                     onLoadModel={handleFileSelected}
                     isLoading={isLoading}
                   />
-                </div>
-              ) : (
-                <div className="flex-1 overflow-hidden">
-                  {events.length > 0 ? (
-                    <EventList
-                      events={events}
-                      selectedEventId={selectedEventId || undefined}
-                      onSelectEvent={(event) => {
-                        setSelectedEventId(event.id);
-                        if (mvpManagerRef.current) {
-                          const mesh = mvpManagerRef.current.findMeshByStableKey(event.targetKey);
-                          if (mesh && viewerRef.current) {
-                            viewerRef.current.fitToObjectSmooth(mesh);
-                          }
-                        }
-                      }}
-                      onEditEvent={(event) => {
-                        setEventEditorData(event);
-                        setEventEditorOpen(true);
-                      }}
-                      onDeleteEvent={() => {
-                        setSelectedEventId(null);
-                      }}
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-muted-foreground">
-                      <div className="text-center">
-                        <p>暂无事件记录</p>
-                        <p className="text-sm mt-2">启用运维模式后可创建事件</p>
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
               <div className="border-t border-border p-4 space-y-3 bg-background/50 max-h-96 overflow-y-auto">
@@ -582,36 +486,6 @@ export default function Home() {
           )}
         </div>
       </div>
-
-      {/* 事件编辑弹窗 */}
-      {eventEditorOpen && (
-        <EventEditor
-          open={eventEditorOpen}
-          event={eventEditorData}
-          targetKey={eventEditorData?.targetKey || ''}
-          targetName={eventEditorData?.targetName || ''}
-          points={eventEditorData?.points || []}
-          onSave={async (data) => {
-            try {
-              if (eventEditorData?.id) {
-                await mvpManagerRef.current?.updateEvent(eventEditorData.id, data as any);
-              } else {
-                await mvpManagerRef.current?.createEvent(data);
-              }
-              setEvents(mvpManagerRef.current?.getEvents() || []);
-              setEventEditorOpen(false);
-              setEventEditorData(null);
-              toast.success('事件已保存');
-            } catch (error) {
-              toast.error('保存失败');
-            }
-          }}
-          onCancel={() => {
-            setEventEditorOpen(false);
-            setEventEditorData(null);
-          }}
-        />
-      )}
     </div>
   );
 }
