@@ -6,8 +6,11 @@ import { Input } from '@/components/ui/input';
 export interface SceneTreeProps {
   root: TreeNode | null;
   selectedNodeId?: string;
-  onSelectNode?: (nodeId: string) => void;
+  selectedNodeIds?: Set<string>;
+  expandedNodeIds?: Set<string>;
+  onSelectNode?: (nodeId: string, ctrlKey?: boolean) => void;
   onExpandNode?: (nodeId: string) => void;
+  onToggleExpanded?: (nodeId: string) => void;
 }
 
 interface ExpandedState {

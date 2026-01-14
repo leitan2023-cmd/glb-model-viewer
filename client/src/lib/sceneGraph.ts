@@ -164,3 +164,17 @@ export function searchTreeNodes(root: TreeNode, query: string): TreeNode[] {
   const flattened = flattenTree(root);
   return flattened.filter((node) => node.name.toLowerCase().includes(lowerQuery));
 }
+
+/**
+ * 根据 Object3D 查找对应的树节点
+ */
+export function findNodeByObject3D(root: TreeNode, object3D: THREE.Object3D): TreeNode | null {
+  return findTreeNode(root, (node) => node.object3D === object3D);
+}
+
+/**
+ * 根据 nodeId 查找树节点
+ */
+export function findNodeById(root: TreeNode, nodeId: string): TreeNode | null {
+  return findTreeNode(root, (node) => node.id === nodeId);
+}

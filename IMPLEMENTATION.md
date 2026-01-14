@@ -1,4 +1,13 @@
-# GLB Model Viewer - 实现细节
+# GLB 模型查看器 - 实现细节
+
+## 目录
+
+1. [Draco 压缩支持](#draco-压缩支持)
+2. [核心实现方案](#核心实现方案)
+3. [双向联动选中](#双向联动选中)
+4. [性能优化](#性能优化)
+
+---
 
 ## Draco 压缩支持
 
@@ -48,7 +57,9 @@ function getGLTFLoader(): GLTFLoader {
 | 下载时间 | ~600ms | ~114ms | 81% |
 | 加载时间 | ~100ms | ~150ms | -50% |
 
-注意：加载时间稍長是因为需要解码 Draco 数据，但整体体验上传时间会大幅减少。
+注意：加载时间稍长是因为需要解码 Draco 数据，但整体体验上传时间会大幅减少。
+
+---
 
 ## 核心实现方案
 
@@ -80,271 +91,207 @@ interface TreeNode {
 }
 ```
 
-**优势**：
-- 完整保留场景层级结构
-- 快速查询节点信息
-- 支持树形界面展示
-
-### 2. 结构树节点 ID → object3D 的映射策略
+### 2. 结构树节点 ID → Object3D 的映射策略
 
 #### 文件：`client/src/lib/sceneGraph.ts`
 
-**映射方式**：
-1. **正向映射**：TreeNode 中直接存储 `object3D` 引用
+**映射方式：**
+
+1. **正向映射**：TreeNode.object3D 直接存储 Three.js 对象引用
 2. **反向映射**：在 Three.js 对象上存储 `__nodeId` 属性
-
-```typescript
-// 正向映射
-const treeNode: TreeNode = {
-  id: 'abc12345',
-  object3D: threeObject,
-  // ...
-};
-
-// 反向映射
-(threeObject as any).__nodeId = 'abc12345';
-```
-
-**查询方式**：
-- **从 ID 查找对象**：遍历 TreeNode 树找到对应节点，获取 `object3D`
-- **从对象查找 ID**：直接访问对象的 `__nodeId` 属性
+3. **查询函数**：
+   - `findNodeByObject3D(root, object3D)` - 根据 Object3D 查找 TreeNode
+   - `findNodeById(root, nodeId)` - 根据 ID 查找 TreeNode
+   - `getNodePath(root, nodeId)` - 获取从根到该节点的完整路径
 
 **优势**：
-- O(1) 时间复杂度的反向查询
-- 避免频繁遍历场景
-- 支持快速高亮操作
+- O(1) 时间复杂度的正向查询
+- 支持快速的反向定位
+- 内存占用最小化
 
 ### 3. 高亮实现方案
 
 #### 文件：`client/src/lib/selectionManager.ts`
 
-**高亮方式**：材质替换（MeshStandardMaterial）
+**高亮方案对比：**
 
-**实现细节**：
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| Outline | 不改变原材质 | 性能开销大，需要额外渲染 | ❌ |
+| Emissive | 保留原材质信息 | 对暗色模型效果差 | ⚠️ |
+| 材质替换 | 清晰可见，性能好 | 需要完全还原 | ✅ |
 
-```typescript
-class SelectionManager {
-  private highlightMaterial: THREE.MeshStandardMaterial;
-  private materialCache: { [meshId: string]: THREE.Material };
-  private highlightedMeshes: THREE.Mesh[];
+**选择的方案：材质替换 + 透明淡化**
 
-  selectNode(node: TreeNode): void {
-    // 1. 获取该节点下的所有 Mesh
-    const meshes = getNodeMeshes(node);
+1. **高亮材质**：
+   ```typescript
+   const highlightMaterial = new THREE.MeshStandardMaterial({
+     color: 0x00d4ff,      // 青蓝色
+     emissive: 0x00d4ff,
+     emissiveIntensity: 0.3,
+     metalness: 0.5,
+     roughness: 0.5,
+   });
+   ```
 
-    // 2. 缓存原始材质
-    for (const mesh of meshes) {
-      const meshId = mesh.uuid;
-      if (!this.materialCache[meshId]) {
-        this.materialCache[meshId] = mesh.material; // 保存原始材质
-      }
-      mesh.material = this.highlightMaterial; // 应用高亮材质
-      this.highlightedMeshes.push(mesh);
-    }
-  }
+2. **淡化材质**：
+   ```typescript
+   const fadedMaterial = originalMaterial.clone();
+   fadedMaterial.transparent = true;
+   fadedMaterial.opacity = 0.4;
+   fadedMaterial.depthWrite = false;
+   ```
 
-  clearSelection(): void {
-    // 恢复原始材质
-    for (const mesh of this.highlightedMeshes) {
-      const meshId = mesh.uuid;
-      if (this.materialCache[meshId]) {
-        mesh.material = this.materialCache[meshId];
-      }
-    }
-    this.highlightedMeshes = [];
-  }
-}
-```
+3. **材质缓存**：
+   ```typescript
+   interface MaterialCache {
+     material: THREE.Material;
+     transparent: boolean;
+     opacity: number;
+     depthWrite: boolean;
+   }
+   ```
 
-**高亮材质配置**：
-```typescript
-new THREE.MeshStandardMaterial({
-  color: 0x00d4ff,           // 青蓝色
-  emissive: 0x00d4ff,        // 发光颜色
-  emissiveIntensity: 0.3,    // 发光强度
-  metalness: 0.3,            // 金属度
-  roughness: 0.4,            // 粗糙度
-})
-```
+**可逆性保证**：
+- 缓存所有原始材质参数
+- 清除选择时完全恢复原始值
+- 不修改原始材质对象，仅替换引用
 
-**优缺点分析**：
+---
 
-| 方案 | 优点 | 缺点 |
-|------|------|------|
-| **材质替换** | 视觉效果好，支持复杂效果，性能高 | 需要缓存原始材质 |
-| **轮廓描边** | 不改变原材质，效果清晰 | 需要后处理 Pass，性能开销大 |
-| **发光效果** | 简单快速 | 效果可能不明显 |
+## 双向联动选中
 
-**选择理由**：
-- 工业设计风格要求清晰的视觉反馈
-- 青蓝色高亮与深灰背景对比度高
-- 发光效果增强视觉层次
-- 性能开销最小
+### 1. 3D 点选 → 结构树定位
 
-### 4. 视角聚焦实现
+#### 文件：`client/src/lib/pickingUtils.ts`
 
-#### 文件：`client/src/components/Viewer3D.tsx`
+**实现流程：**
 
-**函数：`fitToObject(obj: THREE.Object3D)`**
+1. **鼠标事件监听**：在 3D 视窗上监听 click 事件
+2. **射线拾取**：
+   ```typescript
+   raycaster.setFromCamera(mouseNDC, camera);
+   const intersects = raycaster.intersectObjects(pickableObjects);
+   ```
+3. **对象识别**：获取最近的交集对象
+4. **节点查询**：通过 `__nodeId` 反向查找 TreeNode
+5. **UI 更新**：
+   - 展开到该节点的所有祖先
+   - 滚动定位到该节点
+   - 更新选中状态
 
-```typescript
-fitToObject: (obj: THREE.Object3D) => {
-  // 1. 计算包围盒
-  const size = getObjectSize(obj);
-  const center = getObjectCenter(obj);
+### 2. 结构树选中 → 3D 高亮 + 聚焦
 
-  // 2. 计算相机距离
-  const maxDim = Math.max(size.x, size.y, size.z);
-  const fov = camera.fov * (Math.PI / 180);
-  let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-  cameraZ *= 1.5; // 增加 1.5 倍距离以获得更好的视角
+#### 文件：`client/src/pages/Home.tsx`
 
-  // 3. 更新相机
-  camera.position.copy(center);
-  camera.position.z += cameraZ;
-  camera.lookAt(center);
+**实现流程：**
 
-  // 4. 更新控制器
-  controls.target.copy(center);
-  controls.update();
-}
-```
+1. **节点选择**：用户点击结构树节点
+2. **高亮更新**：
+   ```typescript
+   selectionManager.addToSelection(node);
+   ```
+3. **相机聚焦**：
+   ```typescript
+   cameraManager.frameObjectSmooth(node.object3D, { duration: 400 });
+   ```
+4. **透明淡化**：
+   ```typescript
+   selectionManager._applySelectionState(selectedMeshes);
+   ```
 
-**关键点**：
-- 使用 Three.js 的 Box3 计算包围盒
-- 基于 FOV 和尺寸计算相机距离
-- 乘以 1.5 倍系数确保完整显示
-- 同步更新 OrbitControls 的目标点
+### 3. 60% 透明淡化实现
 
-### 5. 搜索功能实现
+#### 文件：`client/src/lib/selectionManager.ts`
 
-#### 文件：`client/src/lib/sceneGraph.ts`
+**淡化策略：**
 
-**函数：`searchTreeNodes(root: TreeNode, query: string): TreeNode[]`**
+1. **识别非选中对象**：遍历场景中所有 Mesh
+2. **应用淡化材质**：
+   ```typescript
+   mesh.material = fadedMaterial;
+   fadedMaterial.depthWrite = false;  // 避免遮挡
+   ```
+3. **保留选中对象**：高亮材质不受影响
+4. **恢复机制**：清除选择时恢复所有原始材质
 
-```typescript
-export function searchTreeNodes(root: TreeNode, query: string): TreeNode[] {
-  const lowerQuery = query.toLowerCase();
-  const flattened = flattenTree(root);
-  return flattened.filter((node) => 
-    node.name.toLowerCase().includes(lowerQuery)
-  );
-}
-```
+**性能优化**：
+- 缓存淡化材质，避免重复创建
+- 使用 depthWrite = false 避免深度冲突
+- 只在选择变化时更新材质
 
-**特点**：
-- 模糊匹配（包含关系）
-- 不区分大小写
-- 返回所有匹配节点
-- O(n) 时间复杂度
+### 4. 精准相机聚焦
 
-### 6. 导出功能实现
+#### 文件：`client/src/lib/cameraManager.ts`
 
-#### 文件：`client/src/lib/exportUtils.ts`
+**聚焦算法：**
 
-**导出数据结构**：
-```typescript
-interface ExportData {
-  timestamp: string;
-  selectedNodes: SelectedNodeInfo[];
-}
+1. **计算包围盒**：
+   ```typescript
+   const box = new THREE.Box3();
+   object.traverse((child) => {
+     if (child instanceof THREE.Mesh) {
+       box.expandByObject(child);
+     }
+   });
+   ```
 
-interface SelectedNodeInfo {
-  id: string;
-  name: string;
-  type: string;
-  path: string;              // 从根到该节点的路径
-  meshCount: number;
-  triangleCount: number;
-}
-```
+2. **计算相机距离**：
+   ```typescript
+   const maxDim = Math.max(box.size.x, box.size.y, box.size.z);
+   const fov = camera.fov * (Math.PI / 180);
+   const distance = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * padding;
+   ```
 
-**导出流程**：
-1. 获取选中节点的完整路径（从根到该节点）
-2. 收集节点的所有信息
-3. 生成 JSON 对象
-4. 创建 Blob 并下载
+3. **平滑过渡**：
+   ```typescript
+   camera.position.lerpVectors(startPos, targetPos, easeProgress);
+   controls.target.lerpVectors(startTarget, targetCenter, easeProgress);
+   ```
 
-## 性能考虑
+4. **缓动函数**：使用 easeInOutCubic 提供自然的过渡效果
 
-### 内存优化
-- **材质复用**：所有高亮使用同一个 MeshStandardMaterial 实例
-- **缓存策略**：缓存原始材质避免重复查询
-- **ID 复用**：使用字符串 ID 而不是对象引用
+---
 
-### 渲染优化
-- **OrbitControls 阻尼**：提供平滑交互体验
-- **阴影贴图**：启用 PCFShadowMap 提高阴影质量
-- **像素比**：根据设备 DPI 调整渲染分辨率
+## 性能优化
 
-### 加载优化
-- **异步加载**：使用 FileReader 异步读取文件
-- **进度反馈**：实时显示加载进度
-- **流式处理**：避免一次性加载整个文件到内存
+### 1. 材质缓存
 
-## 扩展性设计
+- **缓存策略**：首次应用材质时缓存原始参数
+- **缓存键**：使用 mesh UUID 或 `__nodeId`
+- **缓存大小**：O(n) 其中 n 为 mesh 数量
 
-### 易于扩展的部分
+### 2. 拾取优化
 
-1. **高亮方案**：
-   - 可轻松切换为轮廓描边或发光效果
-   - SelectionManager 类可独立替换
+- **拾取范围**：只检查可见的 Mesh 对象
+- **交集排序**：自动返回最近的对象
+- **事件节流**：可选的点击事件节流
 
-2. **搜索功能**：
-   - 可扩展为正则表达式搜索
-   - 可添加搜索历史记录
+### 3. 相机动画
 
-3. **导出格式**：
-   - 可扩展为 CSV、XML 等格式
-   - 可添加自定义导出字段
+- **使用 requestAnimationFrame**：与渲染循环同步
+- **动画时长**：300-500ms（可配置）
+- **缓动函数**：easeInOutCubic 提供平滑感
 
-4. **材质编辑**：
-   - SelectionManager 可扩展为支持材质属性编辑
-   - 可添加颜色选择器、参数调整等
+### 4. 内存管理
 
-## 已知限制与改进方向
+- **资源清理**：dispose() 方法清理所有资源
+- **引用释放**：避免循环引用
+- **垃圾回收**：及时释放不需要的材质
 
-### 当前限制
-1. **单选模式**：不支持多节点同时选择
-2. **材质还原**：某些复杂材质可能还原不完全
-3. **动画支持**：不支持 GLB 中的动画播放
-4. **拖拽调整**：面板宽度不可拖拽调整
+---
 
-### 改进方向
-1. **多选支持**：
-   - 添加 Shift/Ctrl 多选逻辑
-   - 支持多节点同时高亮
-   - 批量导出功能
+## 测试清单
 
-2. **鼠标拾取**：
-   - 使用 Raycaster 实现 3D 点击选择
-   - 反向定位到树节点
-
-3. **动画支持**：
-   - 集成 AnimationMixer
-   - 添加播放控制界面
-
-4. **性能监控**：
-   - 添加 FPS 监控
-   - 内存使用情况显示
-
-## 测试建议
-
-### 功能测试
-- [ ] 上传各种大小的 GLB 文件
-- [ ] 验证结构树的完整性
-- [ ] 测试节点选择和高亮
-- [ ] 验证视角聚焦功能
-- [ ] 测试搜索功能
-- [ ] 验证导出功能
-
-### 性能测试
-- [ ] 加载 100MB+ 的大模型
-- [ ] 测试高模型（百万面级）的渲染性能
-- [ ] 验证内存占用情况
-- [ ] 测试频繁选择操作的性能
-
-### 兼容性测试
-- [ ] Chrome、Firefox、Safari、Edge
-- [ ] 桌面端和移动端
+- [x] GLB 上传和加载
+- [x] Draco 压缩文件支持
+- [x] 结构树展示和搜索
+- [x] 节点选择和高亮
+- [x] 3D 点选定位
+- [x] 结构树反向聚焦
+- [x] 60% 透明淡化
+- [x] 相机平滑过渡
+- [x] 多选支持
+- [x] 选择导出为 JSON
+- [ ] 大文件性能测试（100MB+）
 - [ ] 不同分辨率和 DPI 设备

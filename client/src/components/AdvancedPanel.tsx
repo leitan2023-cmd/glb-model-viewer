@@ -8,19 +8,30 @@ import { exportSelectedNodes, downloadJSON } from '@/lib/exportUtils';
 export interface AdvancedPanelProps {
   root: TreeNode | null;
   selectedNodeId?: string;
+  selectedNodeIds?: Set<string>;
 }
 
-const AdvancedPanel: React.FC<AdvancedPanelProps> = ({ root, selectedNodeId }) => {
+const AdvancedPanel: React.FC<AdvancedPanelProps> = ({ root, selectedNodeId, selectedNodeIds }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const handleExportSelection = () => {
-    if (!root || !selectedNodeId) return;
+    if (!root) return;
 
-    const exportData = exportSelectedNodes(root, [selectedNodeId]);
+    const nodeIds: string[] = [];
+    if (selectedNodeIds && selectedNodeIds.size > 0) {
+      selectedNodeIds.forEach((id) => nodeIds.push(id));
+    } else if (selectedNodeId) {
+      nodeIds.push(selectedNodeId);
+    }
+
+    if (nodeIds.length === 0) return;
+
+    const exportData = exportSelectedNodes(root, nodeIds);
     downloadJSON(exportData, `selection-${Date.now()}.json`);
   };
 
-  if (!root || !selectedNodeId) {
+  const hasSelection = (selectedNodeIds && selectedNodeIds.size > 0) || selectedNodeId;
+  if (!root || !hasSelection) {
     return null;
   }
 

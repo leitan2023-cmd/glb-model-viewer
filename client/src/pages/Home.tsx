@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import * as THREE from 'three';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -6,13 +6,14 @@ import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { RotateCcw, Maximize2, X, Eye, EyeOff } from 'lucide-react';
 import Viewer3D, { Viewer3DInstance } from '@/components/Viewer3D';
+import { PickResult } from '@/lib/pickingUtils';
 import SceneTree from '@/components/SceneTree';
 import UploadPanel from '@/components/UploadPanel';
 import NodeInfoPanel from '@/components/NodeInfoPanel';
 import ModelStats from '@/components/ModelStats';
 import AdvancedPanel from '@/components/AdvancedPanel';
 import { loadGLB, LoadProgress } from '@/lib/glbLoader';
-import { generateSceneTree, TreeNode, getNodePath } from '@/lib/sceneGraph';
+import { generateSceneTree, TreeNode, getNodePath, findNodeById } from '@/lib/sceneGraph';
 import { SelectionManager } from '@/lib/selectionManager';
 
 export default function Home() {
@@ -20,11 +21,13 @@ export default function Home() {
   const [sceneTree, setSceneTree] = useState<TreeNode | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadProgress, setLoadProgress] = useState(0);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set());
 
   const viewerRef = useRef<Viewer3DInstance | null>(null);
   const selectionManagerRef = useRef<SelectionManager | null>(null);
+  const treeContainerRef = useRef<HTMLDivElement>(null);
 
   const handleFileSelected = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -44,6 +47,17 @@ export default function Home() {
       if (!selectionManagerRef.current) {
         selectionManagerRef.current = new SelectionManager();
       }
+      selectionManagerRef.current.setScene(result.scene);
+
+      // 更新拾取管理器中的场景树
+      if (viewerRef.current) {
+        viewerRef.current.pickingManager.setScene(result.scene, tree);
+      }
+
+      // 清除选择
+      setSelectedNodeIds(new Set());
+      setSelectedNode(null);
+      setExpandedNodeIds(new Set());
 
       toast.success(`成功加载模型: ${file.name}`);
     } catch (error) {
@@ -55,38 +69,88 @@ export default function Home() {
     }
   }, []);
 
-  const handleSelectNode = useCallback((nodeId: string) => {
-    if (!sceneTree) return;
+  /**
+   * 处理节点选择（来自结构树）
+   */
+  const handleSelectNode = useCallback((nodeId: string, ctrlKey: boolean = false) => {
+    if (!sceneTree || !selectionManagerRef.current) return;
 
-    // 查找节点
-    const findNode = (node: TreeNode): TreeNode | null => {
-      if (node.id === nodeId) return node;
-      for (const child of node.children) {
-        const found = findNode(child);
-        if (found) return found;
+    const node = findNodeById(sceneTree, nodeId);
+    if (!node) return;
+
+    let newSelectedIds: Set<string>;
+
+    if (ctrlKey) {
+      // Ctrl 点击：切换多选
+      newSelectedIds = new Set(selectedNodeIds);
+      if (newSelectedIds.has(nodeId)) {
+        newSelectedIds.delete(nodeId);
+      } else {
+        newSelectedIds.add(nodeId);
       }
-      return null;
-    };
+    } else {
+      // 普通点击：单选
+      newSelectedIds = new Set([nodeId]);
+    }
 
-    const node = findNode(sceneTree);
-    if (node) {
-      setSelectedNodeId(nodeId);
-      setSelectedNode(node);
+    setSelectedNodeIds(newSelectedIds);
+    setSelectedNode(node);
 
-      // 高亮节点
-      if (selectionManagerRef.current) {
-        selectionManagerRef.current.selectNode(node);
-      }
+    // 更新选择管理器
+    if (newSelectedIds.size === 0) {
+      selectionManagerRef.current.clearSelection();
+    } else {
+      selectionManagerRef.current.clearSelection();
+      newSelectedIds.forEach((id) => {
+        const n = findNodeById(sceneTree, id);
+        if (n) {
+          selectionManagerRef.current!.addToSelection(n);
+        }
+      });
+    }
 
-      // 聚焦到该节点
-      if (viewerRef.current) {
-        viewerRef.current.fitToObject(node.object3D);
+    // 平滑聚焦到选中节点
+    if (viewerRef.current && newSelectedIds.size > 0) {
+      viewerRef.current.fitToObjectSmooth(node.object3D, 400);
+    }
+
+    // 展开到该节点
+    if (sceneTree) {
+      const path = getNodePath(sceneTree, nodeId);
+      if (path) {
+        const newExpandedIds = new Set(expandedNodeIds);
+        for (const pathNode of path) {
+          newExpandedIds.add(pathNode.id);
+        }
+        setExpandedNodeIds(newExpandedIds);
       }
     }
-  }, [sceneTree]);
+
+    // 滚动到该节点
+    setTimeout(() => {
+      const element = treeContainerRef.current?.querySelector(
+        `[data-node-id="${nodeId}"]`
+      );
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 0);
+  }, [sceneTree, selectedNodeIds, expandedNodeIds]);
+
+  /**
+   * 处理 3D 中的拾取
+   */
+  const handlePickObject = useCallback((pickResult: PickResult | null) => {
+    if (!pickResult || !pickResult.node) {
+      handleClearSelection();
+      return;
+    }
+
+    handleSelectNode(pickResult.node.id, false);
+  }, [handleSelectNode]);
 
   const handleClearSelection = useCallback(() => {
-    setSelectedNodeId(null);
+    setSelectedNodeIds(new Set());
     setSelectedNode(null);
 
     if (selectionManagerRef.current) {
@@ -108,10 +172,25 @@ export default function Home() {
 
   const handleViewerReady = useCallback((viewer: Viewer3DInstance) => {
     viewerRef.current = viewer;
+    if (sceneTree) {
+      viewer.pickingManager.setScene(loadedScene!, sceneTree);
+    }
     if (loadedScene) {
       viewer.fitToModel();
     }
-  }, [loadedScene]);
+  }, [loadedScene, sceneTree]);
+
+  const handleToggleNodeExpanded = useCallback((nodeId: string) => {
+    setExpandedNodeIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(nodeId)) {
+        newSet.delete(nodeId);
+      } else {
+        newSet.add(nodeId);
+      }
+      return newSet;
+    });
+  }, []);
 
   return (
     <div className="w-screen h-screen flex flex-col bg-background">
@@ -142,7 +221,7 @@ export default function Home() {
               适配模型
             </Button>
 
-            {selectedNodeId && (
+            {selectedNodeIds.size > 0 && (
               <Button
                 size="sm"
                 variant="outline"
@@ -164,6 +243,9 @@ export default function Home() {
             {selectedNode.meshCount > 0 && (
               <span> ({selectedNode.meshCount} mesh)</span>
             )}
+            {selectedNodeIds.size > 1 && (
+              <span className="ml-2">+ {selectedNodeIds.size - 1} 个</span>
+            )}
           </div>
         )}
       </div>
@@ -182,17 +264,27 @@ export default function Home() {
             </div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto">
+              <div
+                ref={treeContainerRef}
+                className="flex-1 overflow-y-auto"
+              >
                 <SceneTree
                   root={sceneTree}
-                  selectedNodeId={selectedNodeId || undefined}
+                  selectedNodeIds={selectedNodeIds}
+                  expandedNodeIds={expandedNodeIds}
                   onSelectNode={handleSelectNode}
+                  onToggleExpanded={handleToggleNodeExpanded}
                 />
               </div>
               <div className="border-t border-border p-4 space-y-3 bg-background/50 max-h-96 overflow-y-auto">
                 <ModelStats scene={loadedScene} />
                 {selectedNode && <NodeInfoPanel node={selectedNode} />}
-                <AdvancedPanel root={sceneTree} selectedNodeId={selectedNodeId || undefined} />
+                {sceneTree && (
+                  <AdvancedPanel
+                    root={sceneTree}
+                    selectedNodeIds={selectedNodeIds}
+                  />
+                )}
               </div>
             </div>
           )}
@@ -208,7 +300,11 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <Viewer3D scene={loadedScene} onReady={handleViewerReady} />
+            <Viewer3D
+              scene={loadedScene}
+              onReady={handleViewerReady}
+              onPickObject={handlePickObject}
+            />
           )}
         </div>
       </div>

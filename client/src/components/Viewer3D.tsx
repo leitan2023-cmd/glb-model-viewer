@@ -2,10 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three-stdlib';
 import { getObjectCenter, getObjectSize } from '@/lib/glbLoader';
+import { CameraManager } from '@/lib/cameraManager';
+import { PickingManager, PickResult } from '@/lib/pickingUtils';
 
 export interface Viewer3DProps {
   scene: THREE.Group | null;
   onReady?: (viewer: Viewer3DInstance) => void;
+  onPickObject?: (pickResult: PickResult | null) => void;
 }
 
 export interface Viewer3DInstance {
@@ -13,13 +16,16 @@ export interface Viewer3DInstance {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
   controls: OrbitControls;
+  cameraManager: CameraManager;
+  pickingManager: PickingManager;
   fitToModel: () => void;
   fitToObject: (object: THREE.Object3D) => void;
+  fitToObjectSmooth: (object: THREE.Object3D, duration?: number) => void;
   resetView: () => void;
   dispose: () => void;
 }
 
-const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady }) => {
+const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady, onPickObject }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer3DInstance | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -58,6 +64,12 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady }) => {
     controls.enableZoom = true;
     controls.enablePan = true;
 
+    // 创建相机管理器
+    const cameraManager = new CameraManager(camera as THREE.PerspectiveCamera, controls);
+
+    // 创建拾取管理器
+    const pickingManager = new PickingManager();
+
     // 添加灯光
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     mainScene.add(ambientLight);
@@ -80,6 +92,8 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady }) => {
       scene: mainScene,
       renderer,
       controls,
+      cameraManager,
+      pickingManager,
       fitToModel: () => {
         if (scene && scene.children.length > 0) {
           viewer.fitToObject(scene);
@@ -99,15 +113,17 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady }) => {
         controls.target.copy(center);
         controls.update();
       },
+      fitToObjectSmooth: (obj: THREE.Object3D, duration: number = 400) => {
+        cameraManager.frameObjectSmooth(obj, { duration, padding: 1.5 });
+      },
       resetView: () => {
-        camera.position.set(0, 0, 100);
-        camera.lookAt(0, 0, 0);
-        controls.target.set(0, 0, 0);
-        controls.update();
+        cameraManager.resetView({ duration: 400 });
       },
       dispose: () => {
         renderer.dispose();
         controls.dispose();
+        cameraManager.dispose();
+        pickingManager.dispose();
         container.removeChild(renderer.domElement);
       },
     };
@@ -118,8 +134,26 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady }) => {
     // 添加加载的场景
     if (scene) {
       mainScene.add(scene);
+      pickingManager.setScene(scene, null); // sceneTree 会在 Home 组件中设置
       viewer.fitToModel();
     }
+
+    // 处理鼠标点击拾取
+    const handleMouseClick = (event: MouseEvent) => {
+      // 只在左键点击时执行拾取
+      if (event.button !== 0) return;
+
+      const pickResult = pickingManager.pick(
+        event.clientX,
+        event.clientY,
+        camera,
+        container
+      );
+
+      onPickObject?.(pickResult);
+    };
+
+    renderer.domElement.addEventListener('click', handleMouseClick);
 
     // 动画循环
     const animate = () => {
@@ -142,9 +176,10 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady }) => {
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      renderer.domElement.removeEventListener('click', handleMouseClick);
       viewer.dispose();
     };
-  }, [scene, onReady]);
+  }, [scene, onReady, onPickObject]);
 
   return (
     <div
