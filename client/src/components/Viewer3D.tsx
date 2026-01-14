@@ -1,14 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three-stdlib';
 import { getObjectCenter, getObjectSize } from '@/lib/glbLoader';
 import { CameraManager } from '@/lib/cameraManager';
 import { PickingManager, PickResult } from '@/lib/pickingUtils';
+import { TreeNode, findNodeById } from '@/lib/sceneGraph';
 
 export interface Viewer3DProps {
   scene: THREE.Group | null;
+  sceneTree?: TreeNode | null;
   onReady?: (viewer: Viewer3DInstance) => void;
-  onPickObject?: (pickResult: PickResult | null) => void;
+  onPickObject?: (pickResult: PickResult | null, debugInfo?: any) => void;
 }
 
 export interface Viewer3DInstance {
@@ -25,13 +27,21 @@ export interface Viewer3DInstance {
   dispose: () => void;
 }
 
-const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady, onPickObject }) => {
+const Viewer3D: React.FC<Viewer3DProps> = ({ scene, sceneTree, onReady, onPickObject }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer3DInstance | null>(null);
+  const sceneTreeRef = useRef<TreeNode | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  // 当 sceneTree 更新时，更新 ref（不重新创建 renderer）
   useEffect(() => {
-    if (!containerRef.current) return;
+    sceneTreeRef.current = sceneTree || null;
+    console.log('[viewer] sceneTree updated in ref');
+  }, [sceneTree]);
+
+  // 仅在 scene 首次加载时初始化 renderer（不依赖 sceneTree）
+  useEffect(() => {
+    if (!containerRef.current || !scene) return;
 
     const container = containerRef.current;
     const width = container.clientWidth;
@@ -131,29 +141,163 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady, onPickObject }) => 
     viewerRef.current = viewer;
     onReady?.(viewer);
 
-    // 添加加载的场景
-    if (scene) {
-      mainScene.add(scene);
-      pickingManager.setScene(scene, null); // sceneTree 会在 Home 组件中设置
-      viewer.fitToModel();
+    // ===== 最小可验证的拾取实现 =====
+    
+    // 单例：raycaster、mouse、pickables
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let pickables: THREE.Object3D[] = [];
+
+    // 状态：pointerdown 位置和时间
+    let downX = 0, downY = 0, downT = 0;
+
+    // 收集 pickables（仅加载完成一次）
+    function collectPickables(root: THREE.Object3D) {
+      pickables = [];
+      root.traverse((o: any) => {
+        if (o.isMesh) pickables.push(o);
+      });
+      console.log('[pick] pickables:', pickables.length);
     }
 
-    // 处理鼠标点击拾取
-    const handleMouseClick = (event: MouseEvent) => {
-      // 只在左键点击时执行拾取
-      if (event.button !== 0) return;
+    // 执行拾取
+    function doPick(e: PointerEvent) {
+      const canvas = renderer.domElement;
+      const rect = canvas.getBoundingClientRect();
 
-      const pickResult = pickingManager.pick(
-        event.clientX,
-        event.clientY,
-        camera,
-        renderer.domElement
-      );
+      // 计算 NDC
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
-      onPickObject?.(pickResult);
+      console.log('[pick] rect', {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      });
+      console.log('[pick] ndc', mouse.x, mouse.y);
+      console.log('[pick] pickables', pickables.length);
+
+      // Raycaster 交集测试
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(pickables, true);
+
+      console.log('[pick] hits', hits.length, hits[0]?.object?.name);
+
+      // 初始化 Debug 信息
+      const debugInfo = {
+        pickablesCount: pickables.length,
+        lastDownX: downX,
+        lastDownY: downY,
+        lastNDCX: mouse.x,
+        lastNDCY: mouse.y,
+        hitsCount: hits.length,
+        hitName: '',
+        hitUUID: '',
+        mappedTreeId: '',
+      };
+
+      if (!hits.length) {
+        console.log('[pick] no intersection');
+        onPickObject?.(null, debugInfo);
+        renderer.render(mainScene, camera);
+        return;
+      }
+
+      // 获取命中的 mesh
+      const hitMesh = hits[0].object as THREE.Mesh;
+      console.log('[pick] hit name:', hitMesh.name, 'uuid:', hitMesh.uuid);
+
+      debugInfo.hitName = hitMesh.name;
+      debugInfo.hitUUID = hitMesh.uuid;
+
+      // 沿 parent 向上查找最近的 treeId
+      let obj: any = hitMesh;
+      let foundTreeId: string | null = null;
+
+      while (obj) {
+        if (obj.userData?.treeId) {
+          foundTreeId = obj.userData.treeId;
+          console.log('[pick] mapped treeId:', foundTreeId);
+          debugInfo.mappedTreeId = foundTreeId || '';
+          break;
+        }
+        obj = obj.parent;
+      }
+
+      if (!foundTreeId) {
+        console.log('[pick] no treeId found in ancestors');
+        onPickObject?.(null, debugInfo);
+        renderer.render(mainScene, camera);
+        return;
+      }
+
+      // 根据 treeId 在树中查找对应的节点（使用 ref 中的最新 sceneTree）
+      let pickedNode: TreeNode | null = null;
+      const currentSceneTree = sceneTreeRef.current;
+      if (currentSceneTree) {
+        pickedNode = findNodeById(currentSceneTree, foundTreeId);
+        console.log('[pick] found tree node:', pickedNode?.name);
+      } else {
+        console.log('[pick] sceneTree is null, cannot find node');
+      }
+
+      // 构建 PickResult
+      const pickResult: PickResult = {
+        mesh: hitMesh,
+        point: hits[0].point,
+        distance: hits[0].distance,
+        node: pickedNode,
+      };
+
+      console.log('[pick] calling onPickObject with result:', pickResult);
+      onPickObject?.(pickResult, debugInfo);
+
+      // 强制渲染一帧
+      renderer.render(mainScene, camera);
+    }
+
+    // 绑定事件到 canvas
+    const canvas = renderer.domElement;
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      downX = e.clientX;
+      downY = e.clientY;
+      downT = performance.now();
+      console.log('[pick] pointerdown', { x: downX, y: downY });
     };
 
-    renderer.domElement.addEventListener('click', handleMouseClick);
+    const onPointerUp = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+
+      const dx = e.clientX - downX;
+      const dy = e.clientY - downY;
+      const dist2 = dx * dx + dy * dy;
+      const dt = performance.now() - downT;
+
+      console.log('[pick] pointerup', { dx, dy, dist2, dt });
+
+      // 阈值：距离小于 5px，且不是长按
+      if (dist2 > 25 || dt > 500) {
+        console.log('[pick] treated as drag, skipping pick');
+        return;
+      }
+
+      doPick(e);
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown, { passive: true });
+    canvas.addEventListener('pointerup', onPointerUp, { passive: true });
+    console.log('[pick] bound to canvas', canvas);
+
+    // 添加加载的场景
+    mainScene.add(scene);
+    collectPickables(scene);
+    if (sceneTreeRef.current) {
+      pickingManager.setScene(scene, sceneTreeRef.current);
+    }
+    viewer.fitToModel();
 
     // 动画循环
     const animate = () => {
@@ -176,7 +320,8 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady, onPickObject }) => 
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      renderer.domElement.removeEventListener('click', handleMouseClick);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointerup', onPointerUp);
       viewer.dispose();
     };
   }, [scene, onReady, onPickObject]);

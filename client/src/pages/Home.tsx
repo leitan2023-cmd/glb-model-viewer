@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -12,6 +12,7 @@ import UploadPanel from '@/components/UploadPanel';
 import NodeInfoPanel from '@/components/NodeInfoPanel';
 import ModelStats from '@/components/ModelStats';
 import AdvancedPanel from '@/components/AdvancedPanel';
+import PickDebugHUD, { PickDebugState } from '@/components/PickDebugHUD';
 import { loadGLB, LoadProgress } from '@/lib/glbLoader';
 import { generateSceneTree, TreeNode, getNodePath, findNodeById } from '@/lib/sceneGraph';
 import { SelectionManager } from '@/lib/selectionManager';
@@ -24,6 +25,17 @@ export default function Home() {
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
   const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set());
+  const [pickDebugState, setPickDebugState] = useState<PickDebugState>({
+    pickablesCount: 0,
+    lastDownX: 0,
+    lastDownY: 0,
+    lastNDCX: 0,
+    lastNDCY: 0,
+    hitsCount: 0,
+    hitName: '',
+    hitUUID: '',
+    mappedTreeId: '',
+  });
 
   const viewerRef = useRef<Viewer3DInstance | null>(null);
   const selectionManagerRef = useRef<SelectionManager | null>(null);
@@ -99,29 +111,24 @@ export default function Home() {
     }
 
     setSelectedNodeIds(newSelectedIds);
-    setSelectedNode(node);
+
+    // 获取所有选中的节点
+    const selectedNodes = Array.from(newSelectedIds)
+      .map((id) => findNodeById(tree, id))
+      .filter((n) => n !== null) as TreeNode[];
 
     // 更新选择管理器
-    if (newSelectedIds.size === 0) {
-      selectionManagerRef.current.clearSelection();
-    } else {
-      selectionManagerRef.current.clearSelection();
-      newSelectedIds.forEach((id) => {
-        const n = findNodeById(tree, id);
-        if (n) {
-          selectionManagerRef.current!.addToSelection(n);
-        }
-      });
+    selectionManagerRef.current.clearSelection();
+    for (const selectedNode of selectedNodes) {
+      selectionManagerRef.current.addToSelection(selectedNode);
     }
 
-    // 平滑聚焦到选中节点（仅当单选时）
-    if (newSelectedIds.size === 1) {
-      viewerRef.current.fitToObjectSmooth(node.object3D, 400);
-    }
+    // 更新 UI
+    setSelectedNode(selectedNodes[0] || null);
 
     // 展开到该节点
-    if (tree) {
-      const path = getNodePath(tree, nodeId);
+    if (selectedNodes.length > 0) {
+      const path = getNodePath(tree, selectedNodes[0].id);
       if (path) {
         const newExpandedIds = new Set(expandedNodeIds);
         for (const pathNode of path) {
@@ -129,6 +136,11 @@ export default function Home() {
         }
         setExpandedNodeIds(newExpandedIds);
       }
+    }
+
+    // 平滑聚焦到选中节点（仅当单选时）
+    if (newSelectedIds.size === 1) {
+      viewerRef.current.fitToObjectSmooth(node.object3D, 400);
     }
 
     // 滚动到该节点
@@ -145,12 +157,27 @@ export default function Home() {
   /**
    * 处理 3D 中的拾取
    */
-  const handlePickObject = useCallback((pickResult: PickResult | null) => {
-    if (!pickResult || !pickResult.node) {
+  const handlePickObject = useCallback((pickResult: PickResult | null, debugInfo?: any) => {
+    console.log('[Home] handlePickObject called with result:', pickResult);
+    
+    // 更新 Debug HUD
+    if (debugInfo) {
+      setPickDebugState(debugInfo);
+    }
+    
+    if (!pickResult) {
+      console.log('[Home] pickResult is null');
       handleClearSelection();
       return;
     }
 
+    if (!pickResult.node) {
+      console.log('[Home] pickResult.node is null');
+      handleClearSelection();
+      return;
+    }
+
+    console.log('[Home] Selecting node:', pickResult.node.id, pickResult.node.name);
     handleSelectNode(pickResult.node.id, false);
   }, []);
 
@@ -175,20 +202,6 @@ export default function Home() {
     }
   }, []);
 
-  /**
-   * 仅在模型首次加载完成后调用 fitToModel 一次
-   * 不在 sceneTree 变化时重复调用，避免覆盖用户的 OrbitControls 交互
-   */
-  const handleViewerReady = useCallback((viewer: Viewer3DInstance) => {
-    viewerRef.current = viewer;
-    
-    // 仅在首次加载时调用 fitToModel
-    if (loadedSceneRef.current && sceneTreeRef.current) {
-      viewer.pickingManager.setScene(loadedSceneRef.current, sceneTreeRef.current);
-      viewer.fitToModel();
-    }
-  }, []);
-
   const handleToggleNodeExpanded = useCallback((nodeId: string) => {
     setExpandedNodeIds((prev) => {
       const newSet = new Set(prev);
@@ -201,8 +214,21 @@ export default function Home() {
     });
   }, []);
 
+  const handleViewerReady = useCallback((viewer: Viewer3DInstance) => {
+    viewerRef.current = viewer;
+    
+    // 仅在首次加载时调用 fitToModel
+    if (loadedSceneRef.current && sceneTreeRef.current) {
+      viewer.pickingManager.setScene(loadedSceneRef.current, sceneTreeRef.current);
+      viewer.fitToModel();
+    }
+  }, []);
+
   return (
     <div className="w-screen h-screen flex flex-col bg-background">
+      {/* Debug HUD */}
+      <PickDebugHUD state={pickDebugState} />
+
       {/* 顶部工具条 */}
       <div className="h-16 bg-card border-b border-border flex items-center px-4 gap-3">
         <h1 className="text-lg font-bold text-foreground">GLB Model Viewer</h1>
@@ -311,6 +337,7 @@ export default function Home() {
           ) : (
             <Viewer3D
               scene={loadedScene}
+              sceneTree={sceneTree}
               onReady={handleViewerReady}
               onPickObject={handlePickObject}
             />

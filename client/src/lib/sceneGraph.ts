@@ -63,6 +63,7 @@ export function generateSceneTree(scene: THREE.Group): TreeNode {
     object3DMap[nodeId] = object;
     // 在 Three.js 对象上存储 nodeId，便于反向查询
     (object as any).__nodeId = nodeId;
+    object.userData.treeId = nodeId;
 
     for (const child of object.children) {
       const childNode = traverse(child, node);
