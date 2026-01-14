@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TreeNode, findNodeByObject3D } from '@/lib/sceneGraph';
+import { TreeNode, findNodeById, findNearestNodeIdInAncestors } from '@/lib/sceneGraph';
 
 export interface PickResult {
   mesh: THREE.Mesh;
@@ -10,12 +10,14 @@ export interface PickResult {
 
 /**
  * 鼠标拾取和结构树定位工具
+ * 支持正确的 mesh 映射和向上查找
  */
 export class PickingManager {
   private raycaster: THREE.Raycaster;
   private mouse: THREE.Vector2;
   private scene: THREE.Group | null = null;
   private sceneTree: TreeNode | null = null;
+  private pickableObjects: THREE.Object3D[] = [];
 
   constructor() {
     this.raycaster = new THREE.Raycaster();
@@ -28,6 +30,24 @@ export class PickingManager {
   setScene(scene: THREE.Group, sceneTree: TreeNode | null): void {
     this.scene = scene;
     this.sceneTree = sceneTree;
+    
+    // 收集所有可拾取的 mesh
+    this.collectPickableObjects();
+  }
+
+  /**
+   * 收集所有可拾取的 mesh 对象
+   */
+  private collectPickableObjects(): void {
+    this.pickableObjects = [];
+    
+    if (!this.scene) return;
+
+    this.scene.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && obj.geometry) {
+        this.pickableObjects.push(obj);
+      }
+    });
   }
 
   /**
@@ -38,14 +58,14 @@ export class PickingManager {
     clientX: number,
     clientY: number,
     canvas: HTMLCanvasElement
-  ): THREE.Vector2 {
+  ): THREE.Vector2 | null {
     const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
 
     // 确保坐标在 canvas 范围内
     if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
-      return null as any;
+      return null;
     }
 
     this.mouse.x = (x / rect.width) * 2 - 1;
@@ -67,7 +87,7 @@ export class PickingManager {
     camera: THREE.Camera,
     canvas: HTMLCanvasElement
   ): PickResult | null {
-    if (!this.scene) return null;
+    if (!this.scene || this.pickableObjects.length === 0) return null;
 
     // 获取鼠标 NDC 坐标
     const mouseNDC = this.getMouseNDC(clientX, clientY, canvas);
@@ -76,20 +96,8 @@ export class PickingManager {
     // 设置射线
     this.raycaster.setFromCamera(this.mouse, camera);
 
-    // 收集所有可拾取的对象（所有 Mesh）
-    const pickableObjects: THREE.Object3D[] = [];
-    this.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh && obj.geometry) {
-        pickableObjects.push(obj);
-      }
-    });
-
-    if (pickableObjects.length === 0) {
-      return null;
-    }
-
     // 执行射线交集测试（recursive=true 确保检查所有后代）
-    const intersects = this.raycaster.intersectObjects(pickableObjects, true);
+    const intersects = this.raycaster.intersectObjects(this.pickableObjects, true);
 
     if (intersects.length === 0) {
       return null;
@@ -98,7 +106,14 @@ export class PickingManager {
     // 获取第一个交集（最近的对象）
     const intersection = intersects[0];
     const mesh = intersection.object as THREE.Mesh;
-    const node = this.sceneTree ? findNodeByObject3D(this.sceneTree, mesh) : null;
+
+    // 向上查找最近的有 nodeId 的父串
+    const nodeId = findNearestNodeIdInAncestors(mesh);
+    
+    let node: TreeNode | null = null;
+    if (nodeId && this.sceneTree) {
+      node = findNodeById(this.sceneTree, nodeId);
+    }
 
     return {
       mesh,
@@ -113,7 +128,11 @@ export class PickingManager {
    */
   getMeshNode(mesh: THREE.Mesh): TreeNode | null {
     if (!this.sceneTree) return null;
-    return findNodeByObject3D(this.sceneTree, mesh);
+    
+    const nodeId = findNearestNodeIdInAncestors(mesh);
+    if (!nodeId) return null;
+    
+    return findNodeById(this.sceneTree, nodeId);
   }
 
   /**
@@ -122,5 +141,6 @@ export class PickingManager {
   dispose(): void {
     this.scene = null;
     this.sceneTree = null;
+    this.pickableObjects = [];
   }
 }

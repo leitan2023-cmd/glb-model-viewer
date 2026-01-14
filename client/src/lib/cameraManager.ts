@@ -1,39 +1,76 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three-stdlib';
+import { toast } from 'sonner';
 
 export interface CameraFrameOptions {
   duration?: number; // 过渡时间（毫秒）
   padding?: number; // 包围盒周围的填充系数（1.0 = 无填充）
 }
 
+interface CameraState {
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+  near: number;
+  far: number;
+}
+
 /**
- * 相机管理器
+ * 相机管理器 - 带完整的防爆逻辑
  * 提供精准的聚焦、框选和平滑过渡功能
  */
 export class CameraManager {
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
+  private scene: THREE.Scene | null = null;
   private animationId: number | null = null;
   private startTime: number = 0;
+  private prevCameraState: CameraState | null = null;
 
-  constructor(camera: THREE.PerspectiveCamera, controls: OrbitControls) {
+  // 距离限制（防爆参数）
+  private MIN_DISTANCE = 0.1;
+  private MAX_DISTANCE = 100000;
+  private MIN_BBOX_SIZE = 1e-6;
+  private MAX_BBOX_SIZE = 1e6;
+
+  constructor(camera: THREE.PerspectiveCamera, controls: OrbitControls, scene?: THREE.Scene) {
     this.camera = camera;
     this.controls = controls;
+    this.scene = scene || null;
+  }
+
+  /**
+   * 设置场景引用
+   */
+  setScene(scene: THREE.Scene): void {
+    this.scene = scene;
+  }
+
+  /**
+   * 更新 world matrix（关键！防止 bbox 计算错误）
+   */
+  private updateWorldMatrix(object: THREE.Object3D): void {
+    object.updateWorldMatrix(true, true);
+    if (this.scene) {
+      this.scene.updateMatrixWorld(true);
+    }
   }
 
   /**
    * 计算对象的世界空间包围盒
    */
   private getWorldBoundingBox(object: THREE.Object3D): THREE.Box3 {
+    this.updateWorldMatrix(object);
+    
     const box = new THREE.Box3();
     object.traverse((child) => {
       if (child instanceof THREE.Mesh && child.geometry) {
         child.geometry.computeBoundingBox();
         const localBox = child.geometry.boundingBox;
         if (localBox) {
-          localBox.clone().applyMatrix4(child.matrixWorld);
-          box.expandByPoint(localBox.min);
-          box.expandByPoint(localBox.max);
+          const clonedBox = localBox.clone();
+          clonedBox.applyMatrix4(child.matrixWorld);
+          box.expandByPoint(clonedBox.min);
+          box.expandByPoint(clonedBox.max);
         }
       }
     });
@@ -41,82 +78,256 @@ export class CameraManager {
   }
 
   /**
-   * 根据包围盒计算合适的相机距离
+   * 校验包围盒是否有效
    */
-  private calculateCameraDistance(box: THREE.Box3, padding: number = 1.5): number {
+  private isValidBoundingBox(box: THREE.Box3): { valid: boolean; reason?: string } {
+    // 检查是否为空
+    if (box.isEmpty()) {
+      return { valid: false, reason: '该节点无有效几何体' };
+    }
+
     const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-    const fov = this.camera.fov * (Math.PI / 180);
-    let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-    cameraDistance *= padding;
-    return cameraDistance;
+
+    // 检查中心点是否有效
+    if (!isFinite(center.x) || !isFinite(center.y) || !isFinite(center.z)) {
+      return { valid: false, reason: '包围盒中心点无效' };
+    }
+
+    // 检查尺寸是否在合理范围
+    if (maxDim < this.MIN_BBOX_SIZE) {
+      return { valid: false, reason: '对象过小，无法聚焦' };
+    }
+
+    if (maxDim > this.MAX_BBOX_SIZE) {
+      return { valid: false, reason: '对象过大，无法聚焦' };
+    }
+
+    return { valid: true };
   }
 
   /**
-   * 聚焦到对象（立即）
+   * Clamp 函数
    */
-  frameObject(object: THREE.Object3D, options: CameraFrameOptions = {}): void {
-    this.cancelAnimation();
-    const { padding = 1.5 } = options;
+  private clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
+  }
 
-    const box = this.getWorldBoundingBox(object);
-    const center = box.getCenter(new THREE.Vector3());
-    const distance = this.calculateCameraDistance(box, padding);
+  /**
+   * 根据包围盒计算合适的相机距离（带防爆）
+   */
+  private calculateCameraDistance(box: THREE.Box3, padding: number = 1.2): number {
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
 
-    // 获取当前相机方向
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+    // 基于 FOV 计算距离
+    const fov = THREE.MathUtils.degToRad(this.camera.fov * 0.5);
+    let distance = maxDim / (2 * Math.tan(fov));
 
-    // 设置新的相机位置
-    this.camera.position.copy(direction.multiplyScalar(distance).add(center));
-    this.controls.target.copy(center);
+    // 应用填充系数
+    distance *= padding;
+
+    // 计算距离限制
+    const minDist = maxDim * 0.8;
+    const maxDist = maxDim * 10;
+
+    // 应用上下限
+    distance = this.clamp(distance, minDist, maxDist);
+
+    // 最终的全局限制
+    distance = this.clamp(distance, this.MIN_DISTANCE, this.MAX_DISTANCE);
+
+    return distance;
+  }
+
+  /**
+   * 保存当前相机状态（用于失败回滚）
+   */
+  private saveCameraState(): CameraState {
+    return {
+      position: this.camera.position.clone(),
+      target: this.controls.target.clone(),
+      near: this.camera.near,
+      far: this.camera.far,
+    };
+  }
+
+  /**
+   * 恢复相机状态（失败回滚）
+   */
+  private restoreCameraState(state: CameraState): void {
+    this.camera.position.copy(state.position);
+    this.controls.target.copy(state.target);
+    this.camera.near = state.near;
+    this.camera.far = state.far;
+    this.camera.updateProjectionMatrix();
     this.controls.update();
   }
 
   /**
-   * 聚焦到对象（带平滑过渡）
+   * 检查相机是否能看到目标点
+   */
+  private canSeeTarget(targetCenter: THREE.Vector3, distance: number): boolean {
+    // 检查目标点是否在相机前方
+    const toTarget = targetCenter.clone().sub(this.camera.position);
+    const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    
+    const dotProduct = toTarget.dot(cameraDirection);
+    
+    // 如果点积为负，说明目标在相机后方
+    if (dotProduct < 0) {
+      return false;
+    }
+
+    // 检查距离是否合理
+    if (distance <= 0 || !isFinite(distance)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * 聚焦到对象（立即）- 带防爆逻辑
+   */
+  frameObject(object: THREE.Object3D, options: CameraFrameOptions = {}): void {
+    this.cancelAnimation();
+    const { padding = 1.2 } = options;
+
+    // 保存当前状态以便失败回滚
+    const prevState = this.saveCameraState();
+
+    try {
+      // 计算包围盒
+      const box = this.getWorldBoundingBox(object);
+
+      // 校验包围盒
+      const validation = this.isValidBoundingBox(box);
+      if (!validation.valid) {
+        toast.warning(`无法聚焦: ${validation.reason}`);
+        return;
+      }
+
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const distance = this.calculateCameraDistance(box, padding);
+
+      // 获取当前相机方向（沿当前朝向退后）
+      const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+
+      // 计算新的相机位置
+      const newPos = center.clone().add(direction.multiplyScalar(distance));
+
+      // 检查是否能看到目标
+      if (!this.canSeeTarget(center, distance)) {
+        toast.warning('聚焦位置异常，已回滚');
+        return;
+      }
+
+      // 更新相机位置
+      this.camera.position.copy(newPos);
+      this.controls.target.copy(center);
+
+      // 自适应 near/far 以避免裁剪
+      const maxDim = Math.max(size.x, size.y, size.z);
+      this.camera.near = Math.max(distance / 1000, 0.01);
+      this.camera.far = Math.max(distance * 100, 2000);
+      this.camera.updateProjectionMatrix();
+
+      this.controls.update();
+    } catch (error) {
+      console.error('聚焦失败:', error);
+      toast.error('聚焦失败，已回滚到上一视角');
+      this.restoreCameraState(prevState);
+    }
+  }
+
+  /**
+   * 聚焦到对象（带平滑过渡）- 带防爆逻辑
    */
   frameObjectSmooth(object: THREE.Object3D, options: CameraFrameOptions = {}): void {
     this.cancelAnimation();
-    const { duration = 400, padding = 1.5 } = options;
+    const { duration = 400, padding = 1.2 } = options;
 
-    const box = this.getWorldBoundingBox(object);
-    const targetCenter = box.getCenter(new THREE.Vector3());
-    const targetDistance = this.calculateCameraDistance(box, padding);
+    // 保存当前状态以便失败回滚
+    const prevState = this.saveCameraState();
+    this.prevCameraState = prevState;
 
-    // 获取当前相机方向
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+    try {
+      // 计算包围盒
+      const box = this.getWorldBoundingBox(object);
 
-    // 计算目标相机位置
-    const targetPosition = direction.clone().multiplyScalar(targetDistance).add(targetCenter);
-
-    // 保存起始状态
-    const startPosition = this.camera.position.clone();
-    const startTarget = this.controls.target.clone();
-
-    this.startTime = performance.now();
-
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - this.startTime;
-      const progress = Math.min(elapsed / duration, 1);
-
-      // 使用缓动函数（easeInOutCubic）
-      const easeProgress = progress < 0.5
-        ? 4 * progress * progress * progress
-        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-
-      // 插值相机位置和目标
-      this.camera.position.lerpVectors(startPosition, targetPosition, easeProgress);
-      this.controls.target.lerpVectors(startTarget, targetCenter, easeProgress);
-      this.controls.update();
-
-      if (progress < 1) {
-        this.animationId = requestAnimationFrame(animate);
-      } else {
-        this.animationId = null;
+      // 校验包围盒
+      const validation = this.isValidBoundingBox(box);
+      if (!validation.valid) {
+        toast.warning(`无法聚焦: ${validation.reason}`);
+        return;
       }
-    };
 
-    this.animationId = requestAnimationFrame(animate);
+      const targetCenter = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const targetDistance = this.calculateCameraDistance(box, padding);
+
+      // 获取当前相机方向
+      const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+
+      // 计算目标相机位置
+      const targetPosition = targetCenter.clone().add(direction.multiplyScalar(targetDistance));
+
+      // 检查是否能看到目标
+      if (!this.canSeeTarget(targetCenter, targetDistance)) {
+        toast.warning('聚焦位置异常，已回滚');
+        this.restoreCameraState(prevState);
+        return;
+      }
+
+      // 保存起始状态
+      const startPosition = this.camera.position.clone();
+      const startTarget = this.controls.target.clone();
+      const startNear = this.camera.near;
+      const startFar = this.camera.far;
+
+      // 计算目标 near/far
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const targetNear = Math.max(targetDistance / 1000, 0.01);
+      const targetFar = Math.max(targetDistance * 100, 2000);
+
+      this.startTime = performance.now();
+
+      const animate = (currentTime: number) => {
+        const elapsed = currentTime - this.startTime;
+        const progress = Math.min(elapsed / duration, 1);
+
+        // 使用缓动函数（easeInOutCubic）
+        const easeProgress = progress < 0.5
+          ? 4 * progress * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+        // 插值相机位置和目标
+        this.camera.position.lerpVectors(startPosition, targetPosition, easeProgress);
+        this.controls.target.lerpVectors(startTarget, targetCenter, easeProgress);
+
+        // 插值 near/far
+        this.camera.near = startNear + (targetNear - startNear) * easeProgress;
+        this.camera.far = startFar + (targetFar - startFar) * easeProgress;
+        this.camera.updateProjectionMatrix();
+
+        this.controls.update();
+
+        if (progress < 1) {
+          this.animationId = requestAnimationFrame(animate);
+        } else {
+          this.animationId = null;
+        }
+      };
+
+      this.animationId = requestAnimationFrame(animate);
+    } catch (error) {
+      console.error('平滑聚焦失败:', error);
+      toast.error('聚焦失败，已回滚到上一视角');
+      this.restoreCameraState(prevState);
+    }
   }
 
   /**
@@ -132,16 +343,17 @@ export class CameraManager {
       totalBox.union(box);
     }
 
-    const { padding = 1.5 } = options;
-    const center = totalBox.getCenter(new THREE.Vector3());
-    const distance = this.calculateCameraDistance(totalBox, padding);
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-    const targetPosition = direction.clone().multiplyScalar(distance).add(center);
+    // 校验包围盒
+    const validation = this.isValidBoundingBox(totalBox);
+    if (!validation.valid) {
+      toast.warning(`无法聚焦: ${validation.reason}`);
+      return;
+    }
 
-    // 使用一个临时对象来调用 frameObjectSmooth
-    const tempObject = new THREE.Group();
-    tempObject.position.copy(center);
-    this.frameObjectSmooth(tempObject, options);
+    // 使用 frameObjectSmooth 处理
+    const tempGroup = new THREE.Group();
+    tempGroup.position.copy(totalBox.getCenter(new THREE.Vector3()));
+    this.frameObjectSmooth(tempGroup, options);
   }
 
   /**

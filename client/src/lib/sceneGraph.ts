@@ -178,3 +178,21 @@ export function findNodeByObject3D(root: TreeNode, object3D: THREE.Object3D): Tr
 export function findNodeById(root: TreeNode, nodeId: string): TreeNode | null {
   return findTreeNode(root, (node) => node.id === nodeId);
 }
+
+/**
+ * 从 Object3D 向上查找最近的有 nodeId 的父串
+ * 用于拾取子 mesh 时定位到父节点
+ */
+export function findNearestNodeIdInAncestors(object: THREE.Object3D): string | null {
+  let current: THREE.Object3D | null = object;
+  
+  while (current) {
+    const nodeId = (current as any).__nodeId;
+    if (nodeId) {
+      return nodeId;
+    }
+    current = current.parent;
+  }
+  
+  return null;
+}
