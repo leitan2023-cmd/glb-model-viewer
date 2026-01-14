@@ -1,3 +1,4 @@
+import { openDatabase, transaction } from './db';
 import { nanoid } from 'nanoid';
 
 export type EventType = 'cut_line' | 'bearing' | 'column' | 'backburn';
@@ -38,34 +39,6 @@ let dbInstance: IDBDatabase | null = null;
 /**
  * 打开数据库
  */
-async function openDatabase(): Promise<IDBDatabase> {
-  if (dbInstance) {
-    return dbInstance;
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = () => {
-      reject(new Error('Failed to open IndexedDB'));
-    };
-
-    request.onsuccess = () => {
-      dbInstance = request.result;
-      resolve(dbInstance);
-    };
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-
-      if (!db.objectStoreNames.contains(EVENT_STORE)) {
-        const store = db.createObjectStore(EVENT_STORE, { keyPath: 'id' });
-        store.createIndex('modelId', 'modelId', { unique: false });
-        store.createIndex('createdAt', 'createdAt', { unique: false });
-      }
-    };
-  });
-}
 
 /**
  * 创建事件记录

@@ -28,6 +28,7 @@ import { EventRecord, createEventRecord, getEventsByModelId, updateEventRecord }
 import { AnnotationRenderer } from '@/lib/annotationRenderer';
 import { MeasureTool } from '@/lib/measureTool';
 import { MVPManager } from '@/lib/mvpManager';
+import { useToolManager } from '@/hooks/useToolManager';
 
 export default function Home() {
   const [loadedScene, setLoadedScene] = useState<THREE.Group | null>(null);
@@ -56,6 +57,7 @@ export default function Home() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
+  const { toolState, setTool, getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints } = useToolManager();
   const [eventEditorOpen, setEventEditorOpen] = useState(false);
   const [eventEditorData, setEventEditorData] = useState<any>(null);
   const [stableKeyMap, setStableKeyMap] = useState<Map<THREE.Object3D, any> | null>(null);
@@ -117,7 +119,7 @@ export default function Home() {
       console.error('加载失败:', error);
       throw error;
     }
-  }, []);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   /**
    * 处理文件选择（初次加载或替换）
@@ -243,7 +245,10 @@ export default function Home() {
    */
   const handlePickObject = useCallback((pickResult: PickResult | null, debugInfo?: any) => {
     // 运维模式：创建事件
-    if (maintenanceMode && pickResult) {
+    const tool = getTool();
+
+    // 运维模式：创建事件
+    if (tool === 'OPS_ANNOTATE' && pickResult) {
       const stableKey = mvpManagerRef.current?.getStableKey(pickResult.mesh);
       if (stableKey) {
         setEventEditorData({
@@ -261,15 +266,25 @@ export default function Home() {
     }
 
     // 量测模式：添加测量点
-    if (measureMode && pickResult) {
-      mvpManagerRef.current?.addMeasurePoint(
-        pickResult.point,
-        debugInfo?.lastNDCX || 0,
-        debugInfo?.lastNDCY || 0
-      );
-      if (mvpManagerRef.current?.getMeasurePointCount() === 2) {
-        setMeasureMode(false);
-        toast.success('测量完成');
+    // 量测模式：添加测量点
+    if (tool === 'MEASURE_DISTANCE' && pickResult) {
+      const pointCount = addMeasurePoint({
+        x: pickResult.point.x,
+        y: pickResult.point.y,
+        z: pickResult.point.z,
+      });
+      
+      if (pointCount === 2) {
+        // 计算距离
+        const points = getMeasurePoints();
+        if (points.length === 2) {
+          const p1 = new THREE.Vector3(points[0].x, points[0].y, points[0].z);
+          const p2 = new THREE.Vector3(points[1].x, points[1].y, points[1].z);
+          const distance = p1.distanceTo(p2);
+          toast.success(`测量完成：${distance.toFixed(2)}m`);
+          // 清除测量点，准备下一次测量
+          clearMeasurePoints();
+        }
       }
       return;
     }
@@ -296,7 +311,7 @@ export default function Home() {
 
     console.log('[Home] Selecting node:', pickResult.node.id, pickResult.node.name);
     handleSelectNode(pickResult.node.id, false);
-  }, []);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedNodeIds(new Set());
@@ -305,19 +320,19 @@ export default function Home() {
     if (selectionManagerRef.current) {
       selectionManagerRef.current.clearSelection();
     }
-  }, []);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleResetView = useCallback(() => {
     if (viewerRef.current) {
       viewerRef.current.resetView();
     }
-  }, []);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleFitModel = useCallback(() => {
     if (viewerRef.current) {
       viewerRef.current.fitToModel();
     }
-  }, []);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleToggleNodeExpanded = useCallback((nodeId: string) => {
     setExpandedNodeIds((prev) => {
@@ -329,7 +344,7 @@ export default function Home() {
       }
       return newSet;
     });
-  }, []);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleViewerReady = useCallback((viewer: Viewer3DInstance) => {
     viewerRef.current = viewer;
@@ -339,7 +354,7 @@ export default function Home() {
       viewer.pickingManager.setScene(loadedSceneRef.current, sceneTreeRef.current);
       viewer.fitToModel();
     }
-  }, []);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleUploadClick = useCallback(() => {
     const input = document.createElement('input');
@@ -414,7 +429,7 @@ export default function Home() {
                 <Button
                   size="sm"
                   variant={maintenanceMode ? 'default' : 'outline'}
-                  onClick={() => setMaintenanceMode(!maintenanceMode)}
+                  onClick={() => setTool("OPS_ANNOTATE")}
                   title="运维模式：点击模型创建事件"
                 >
                   🔧 运维模式
@@ -422,7 +437,7 @@ export default function Home() {
                 <Button
                   size="sm"
                   variant={measureMode ? 'default' : 'outline'}
-                  onClick={() => setMeasureMode(!measureMode)}
+                  onClick={() => setTool("MEASURE_DISTANCE")}
                   title="量测模式：点击两处测量距离"
                 >
                   📏 量测

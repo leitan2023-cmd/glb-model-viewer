@@ -1,3 +1,4 @@
+import { openDatabase, transaction } from './db';
 import { nanoid } from 'nanoid';
 
 export interface PartState {
@@ -25,32 +26,6 @@ let dbInstance: IDBDatabase | null = null;
 /**
  * 打开数据库
  */
-async function openDatabase(): Promise<IDBDatabase> {
-  if (dbInstance) {
-    return dbInstance;
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = () => {
-      reject(new Error('Failed to open IndexedDB'));
-    };
-
-    request.onsuccess = () => {
-      dbInstance = request.result;
-      resolve(dbInstance);
-    };
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-
-      if (!db.objectStoreNames.contains(STATE_STORE)) {
-        db.createObjectStore(STATE_STORE, { keyPath: 'modelId' });
-      }
-    };
-  });
-}
 
 /**
  * 保存模型状态

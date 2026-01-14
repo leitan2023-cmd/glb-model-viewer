@@ -1,3 +1,4 @@
+import { openDatabase, transaction } from './db';
 import { nanoid } from 'nanoid';
 import { ModelHistoryEntry, ModelStats } from './modelManager';
 
@@ -12,40 +13,6 @@ let dbInstance: IDBDatabase | null = null;
 /**
  * 打开或创建数据库
  */
-async function openDatabase(): Promise<IDBDatabase> {
-  if (dbInstance) {
-    return dbInstance;
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = () => {
-      reject(new Error('Failed to open IndexedDB'));
-    };
-
-    request.onsuccess = () => {
-      dbInstance = request.result;
-      resolve(dbInstance);
-    };
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-
-      // 创建 blob store
-      if (!db.objectStoreNames.contains(BLOB_STORE)) {
-        db.createObjectStore(BLOB_STORE, { keyPath: 'key' });
-      }
-
-      // 创建 history store
-      if (!db.objectStoreNames.contains(HISTORY_STORE)) {
-        const historyStore = db.createObjectStore(HISTORY_STORE, { keyPath: 'id' });
-        // 创建索引以便按时间排序
-        historyStore.createIndex('lastAccessedAt', 'lastAccessedAt', { unique: false });
-      }
-    };
-  });
-}
 
 /**
  * 保存文件 blob 到 IndexedDB
