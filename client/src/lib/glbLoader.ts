@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three-stdlib';
+import { GLTFLoader, DRACOLoader } from 'three-stdlib';
 
 export interface LoadProgress {
   loaded: number;
@@ -13,10 +13,24 @@ export interface LoadResult {
 }
 
 let gltfLoader: GLTFLoader | null = null;
+let dracoLoader: DRACOLoader | null = null;
+
+function getDRACOLoader(): DRACOLoader {
+  if (!dracoLoader) {
+    dracoLoader = new DRACOLoader();
+    // 设置 Draco 解码库的路径
+    // 使用 Google 提供的 CDN 地址
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+  }
+  return dracoLoader;
+}
 
 function getGLTFLoader(): GLTFLoader {
   if (!gltfLoader) {
     gltfLoader = new GLTFLoader();
+    // 配置 DRACOLoader 以支持 Draco 压缩的 GLB 文件
+    const draco = getDRACOLoader();
+    gltfLoader.setDRACOLoader(draco);
   }
   return gltfLoader;
 }

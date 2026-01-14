@@ -9,6 +9,7 @@
 - **文件选择**：点击上传区域选择本地 GLB 文件
 - **进度显示**：加载过程中显示百分比进度条
 - **支持大文件**：支持加载 100MB+ 的 GLB 模型
+- **Draco 压缩支持**：自动识别并解码 Draco 压缩的 GLB 文件，显著减小文件大小
 
 ### 2. 3D 视窗（右侧）
 - **WebGL 渲染**：基于 Three.js 的高性能 3D 渲染
@@ -248,6 +249,19 @@ pnpm preview
 - 确保已正确选择节点
 - 检查节点是否包含 Mesh
 - 尝试调整视角查看
+
+## Draco 压缩支持
+
+本应用支持加载 Draco 压缩的 GLB 文件。Draco 是 Google 开发的 3D 几何压缩库，可以将文件大小减小 80-90%。
+
+**示例**：原始 GLB 60.19 KB → Draco 压缩后 11.37 KB（压缩率 81%）
+
+要生成 Draco 压缩的 GLB 文件，可使用 gltf-transform 工具：
+
+```bash
+npm install -g @gltf-transform/cli
+gltf-transform draco input.glb output.glb
+```
 
 ## 许可证
 
