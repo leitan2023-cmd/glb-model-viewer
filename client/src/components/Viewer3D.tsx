@@ -147,7 +147,7 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, onReady, onPickObject }) => 
         event.clientX,
         event.clientY,
         camera,
-        container
+        renderer.domElement
       );
 
       onPickObject?.(pickResult);

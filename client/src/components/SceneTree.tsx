@@ -20,10 +20,12 @@ interface ExpandedState {
 const SceneTree: React.FC<SceneTreeProps> = ({
   root,
   selectedNodeId,
+  selectedNodeIds,
+  expandedNodeIds,
   onSelectNode,
   onExpandNode,
+  onToggleExpanded,
 }) => {
-  const [expandedNodes, setExpandedNodes] = useState<ExpandedState>({});
   const [searchQuery, setSearchQuery] = useState('');
 
   // 过滤节点
@@ -33,15 +35,12 @@ const SceneTree: React.FC<SceneTreeProps> = ({
   }, [root, searchQuery]);
 
   const handleToggleExpand = (nodeId: string) => {
-    setExpandedNodes((prev) => ({
-      ...prev,
-      [nodeId]: !prev[nodeId],
-    }));
-    onExpandNode?.(nodeId);
+    onToggleExpanded?.(nodeId);
   };
 
-  const handleSelectNode = (nodeId: string) => {
-    onSelectNode?.(nodeId);
+  const handleSelectNode = (nodeId: string, event: React.MouseEvent) => {
+    const ctrlKey = event.ctrlKey || event.metaKey;
+    onSelectNode?.(nodeId, ctrlKey);
   };
 
   const getNodeIcon = (node: TreeNode) => {
@@ -60,8 +59,8 @@ const SceneTree: React.FC<SceneTreeProps> = ({
   };
 
   const renderNode = (node: TreeNode, depth: number = 0) => {
-    const isExpanded = expandedNodes[node.id];
-    const isSelected = selectedNodeId === node.id;
+    const isExpanded = expandedNodeIds?.has(node.id) ?? false;
+    const isSelected = selectedNodeIds?.has(node.id) ?? (selectedNodeId === node.id);
     const hasChildren = node.children.length > 0;
 
     return (
@@ -71,7 +70,8 @@ const SceneTree: React.FC<SceneTreeProps> = ({
             isSelected ? 'bg-accent/20 border-l-2 border-accent' : ''
           }`}
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
-          onClick={() => handleSelectNode(node.id)}
+          onClick={(e) => handleSelectNode(node.id, e)}
+          data-node-id={node.id}
         >
           {hasChildren ? (
             <button

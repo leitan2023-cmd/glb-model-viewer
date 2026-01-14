@@ -28,6 +28,8 @@ export default function Home() {
   const viewerRef = useRef<Viewer3DInstance | null>(null);
   const selectionManagerRef = useRef<SelectionManager | null>(null);
   const treeContainerRef = useRef<HTMLDivElement>(null);
+  const sceneTreeRef = useRef<TreeNode | null>(null);
+  const loadedSceneRef = useRef<THREE.Group | null>(null);
 
   const handleFileSelected = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -41,7 +43,9 @@ export default function Home() {
       // 生成场景树
       const tree = generateSceneTree(result.scene);
       setSceneTree(tree);
+      sceneTreeRef.current = tree;
       setLoadedScene(result.scene);
+      loadedSceneRef.current = result.scene;
 
       // 初始化选择管理器
       if (!selectionManagerRef.current) {
@@ -73,9 +77,10 @@ export default function Home() {
    * 处理节点选择（来自结构树）
    */
   const handleSelectNode = useCallback((nodeId: string, ctrlKey: boolean = false) => {
-    if (!sceneTree || !selectionManagerRef.current) return;
+    const tree = sceneTreeRef.current;
+    if (!tree || !selectionManagerRef.current || !viewerRef.current) return;
 
-    const node = findNodeById(sceneTree, nodeId);
+    const node = findNodeById(tree, nodeId);
     if (!node) return;
 
     let newSelectedIds: Set<string>;
@@ -102,21 +107,21 @@ export default function Home() {
     } else {
       selectionManagerRef.current.clearSelection();
       newSelectedIds.forEach((id) => {
-        const n = findNodeById(sceneTree, id);
+        const n = findNodeById(tree, id);
         if (n) {
           selectionManagerRef.current!.addToSelection(n);
         }
       });
     }
 
-    // 平滑聚焦到选中节点
-    if (viewerRef.current && newSelectedIds.size > 0) {
+    // 平滑聚焦到选中节点（仅当单选时）
+    if (newSelectedIds.size === 1) {
       viewerRef.current.fitToObjectSmooth(node.object3D, 400);
     }
 
     // 展开到该节点
-    if (sceneTree) {
-      const path = getNodePath(sceneTree, nodeId);
+    if (tree) {
+      const path = getNodePath(tree, nodeId);
       if (path) {
         const newExpandedIds = new Set(expandedNodeIds);
         for (const pathNode of path) {
@@ -135,7 +140,7 @@ export default function Home() {
         element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }, 0);
-  }, [sceneTree, selectedNodeIds, expandedNodeIds]);
+  }, [selectedNodeIds, expandedNodeIds]);
 
   /**
    * 处理 3D 中的拾取
@@ -147,7 +152,7 @@ export default function Home() {
     }
 
     handleSelectNode(pickResult.node.id, false);
-  }, [handleSelectNode]);
+  }, []);
 
   const handleClearSelection = useCallback(() => {
     setSelectedNodeIds(new Set());
@@ -170,15 +175,19 @@ export default function Home() {
     }
   }, []);
 
+  /**
+   * 仅在模型首次加载完成后调用 fitToModel 一次
+   * 不在 sceneTree 变化时重复调用，避免覆盖用户的 OrbitControls 交互
+   */
   const handleViewerReady = useCallback((viewer: Viewer3DInstance) => {
     viewerRef.current = viewer;
-    if (sceneTree) {
-      viewer.pickingManager.setScene(loadedScene!, sceneTree);
-    }
-    if (loadedScene) {
+    
+    // 仅在首次加载时调用 fitToModel
+    if (loadedSceneRef.current && sceneTreeRef.current) {
+      viewer.pickingManager.setScene(loadedSceneRef.current, sceneTreeRef.current);
       viewer.fitToModel();
     }
-  }, [loadedScene, sceneTree]);
+  }, []);
 
   const handleToggleNodeExpanded = useCallback((nodeId: string) => {
     setExpandedNodeIds((prev) => {
@@ -291,7 +300,7 @@ export default function Home() {
         </div>
 
         {/* 右侧：3D 视窗 */}
-        <div className="flex-1 bg-background relative">
+        <div className="flex-1 bg-background relative pointer-events-auto">
           {!loadedScene ? (
             <div className="w-full h-full flex items-center justify-center text-muted-foreground">
               <div className="text-center">

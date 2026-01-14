@@ -32,15 +32,21 @@ export class PickingManager {
 
   /**
    * 获取鼠标在归一化设备坐标中的位置
+   * 必须使用 canvas 的 boundingClientRect，而不是 window 全屏坐标
    */
   private getMouseNDC(
     clientX: number,
     clientY: number,
-    container: HTMLElement
+    canvas: HTMLCanvasElement
   ): THREE.Vector2 {
-    const rect = container.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
+
+    // 确保坐标在 canvas 范围内
+    if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+      return null as any;
+    }
 
     this.mouse.x = (x / rect.width) * 2 - 1;
     this.mouse.y = -(y / rect.height) * 2 + 1;
@@ -50,22 +56,27 @@ export class PickingManager {
 
   /**
    * 执行射线拾取
+   * @param clientX 鼠标客户端 X 坐标
+   * @param clientY 鼠标客户端 Y 坐标
+   * @param camera 相机对象
+   * @param canvas 渲染器的 canvas 元素
    */
   pick(
     clientX: number,
     clientY: number,
     camera: THREE.Camera,
-    container: HTMLElement
+    canvas: HTMLCanvasElement
   ): PickResult | null {
     if (!this.scene) return null;
 
     // 获取鼠标 NDC 坐标
-    this.getMouseNDC(clientX, clientY, container);
+    const mouseNDC = this.getMouseNDC(clientX, clientY, canvas);
+    if (!mouseNDC) return null;
 
     // 设置射线
     this.raycaster.setFromCamera(this.mouse, camera);
 
-    // 收集所有可拾取的对象
+    // 收集所有可拾取的对象（所有 Mesh）
     const pickableObjects: THREE.Object3D[] = [];
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh && obj.geometry) {
@@ -73,8 +84,12 @@ export class PickingManager {
       }
     });
 
-    // 执行射线交集测试
-    const intersects = this.raycaster.intersectObjects(pickableObjects);
+    if (pickableObjects.length === 0) {
+      return null;
+    }
+
+    // 执行射线交集测试（recursive=true 确保检查所有后代）
+    const intersects = this.raycaster.intersectObjects(pickableObjects, true);
 
     if (intersects.length === 0) {
       return null;
@@ -87,7 +102,7 @@ export class PickingManager {
 
     return {
       mesh,
-      point: intersection.point,
+      point: intersection.point.clone(),
       distance: intersection.distance,
       node,
     };
@@ -99,15 +114,6 @@ export class PickingManager {
   getMeshNode(mesh: THREE.Mesh): TreeNode | null {
     if (!this.sceneTree) return null;
     return findNodeByObject3D(this.sceneTree, mesh);
-  }
-
-  /**
-   * 获取节点的所有祖先节点（从根到该节点的路径）
-   */
-  getNodePath(node: TreeNode | null): TreeNode[] {
-    if (!node) return [];
-    const path: TreeNode[] = [node];
-    return path;
   }
 
   /**
