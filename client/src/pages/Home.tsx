@@ -299,27 +299,29 @@ export default function Home() {
       return;
     }
 
-    // 业务节点提升：跳过 Mesh_/Node_/Scene，找到业务命名节点
-    const hitMesh = pickResult.mesh;
-    const selectedBusinessNode = resolveBusinessNode(hitMesh);
-    const hitMeshName = hitMesh.name;
-    const selectedNodeName = selectedBusinessNode.name;
-    
-    console.log('[Home] hitMesh:', hitMeshName, 'selectedNode:', selectedNodeName);
-    // 业务节点路径已在 resolveBusinessNode 中输出
-
-    // 在树中查找对应的业务节点
-    if (!sceneTreeRef.current) {
-      console.log('[Home] sceneTree is null');
+    if (!pickResult.node) {
+      console.log('[Home] pickResult.node is null');
       handleClearSelection();
       return;
     }
 
-    const treeNode = findNodeById(sceneTreeRef.current, selectedBusinessNode.uuid);
-    if (!treeNode) {
-      console.log('[Home] tree node not found for uuid:', selectedBusinessNode.uuid);
-      handleClearSelection();
-      return;
+    // 直接使用 pickResult.node（原来的逻辑）
+    console.log('[Home] Selecting node:', pickResult.node.id, pickResult.node.name);
+    
+    // 业务节点提升为可选增强（fallback）
+    const hitMesh = pickResult.mesh;
+    const hitMeshName = hitMesh.name;
+    let selectedNodeName = pickResult.node.name;
+    
+    // 尝试提升到业务节点，失败则使用原节点
+    try {
+      const promotedNode = resolveBusinessNode(hitMesh);
+      if (promotedNode && promotedNode !== hitMesh) {
+        selectedNodeName = promotedNode.name;
+        console.log('[Home] promoted to business node:', selectedNodeName);
+      }
+    } catch (e) {
+      console.log('[Home] promote failed, using original node');
     }
 
     // 更新 Debug HUD
@@ -330,8 +332,7 @@ export default function Home() {
     };
     setPickDebugState(updatedDebugInfo);
 
-    console.log('[Home] Selecting tree node:', treeNode.id, treeNode.name);
-    handleSelectNode(treeNode.id, false);
+    handleSelectNode(pickResult.node.id, false);
   }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleClearSelection = useCallback(() => {

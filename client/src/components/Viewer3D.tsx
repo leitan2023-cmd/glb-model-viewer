@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three-stdlib';
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { getObjectCenter, getObjectSize } from '@/lib/glbLoader';
 import { CameraManager } from '@/lib/cameraManager';
 import { PickingManager, PickResult } from '@/lib/pickingUtils';
@@ -17,6 +18,7 @@ export interface Viewer3DInstance {
   camera: THREE.Camera;
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
+  labelRenderer: any; // CSS2DRenderer
   controls: OrbitControls;
   cameraManager: CameraManager;
   pickingManager: PickingManager;
@@ -67,6 +69,14 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, sceneTree, onReady, onPickOb
     renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(renderer.domElement);
 
+    // 创建 CSS2DRenderer（用于距离标签等）
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(width, height);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none'; // 重要：不拦截 pointer 事件
+    container.appendChild(labelRenderer.domElement);
+
     // 创建控制器
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -102,6 +112,7 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, sceneTree, onReady, onPickOb
       camera,
       scene: mainScene,
       renderer,
+      labelRenderer,
       controls,
       cameraManager,
       pickingManager,
