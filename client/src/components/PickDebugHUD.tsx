@@ -10,6 +10,8 @@ export interface PickDebugState {
   hitName: string;
   hitUUID: string;
   mappedTreeId: string;
+  hitMeshName?: string;
+  selectedNodeName?: string;
 }
 
 interface PickDebugHUDProps {
@@ -32,6 +34,12 @@ const PickDebugHUD: React.FC<PickDebugHUDProps> = ({ state }) => {
       <div>lastDown: ({state.lastDownX}, {state.lastDownY})</div>
       <div>lastNDC: ({state.lastNDCX.toFixed(2)}, {state.lastNDCY.toFixed(2)})</div>
       <div>hits: <span className={state.hitsCount > 0 ? 'text-green-400' : 'text-red-400'}>{state.hitsCount}</span></div>
+      {state.hitMeshName && (
+        <div>hitMesh: <span className="text-orange-400">{state.hitMeshName}</span></div>
+      )}
+      {state.selectedNodeName && (
+        <div>selected: <span className="text-green-400">{state.selectedNodeName}</span></div>
+      )}
       {state.hitName && (
         <>
           <div>hitName: {state.hitName}</div>

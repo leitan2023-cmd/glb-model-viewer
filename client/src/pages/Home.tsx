@@ -15,7 +15,7 @@ import AdvancedPanel from '@/components/AdvancedPanel';
 import PickDebugHUD, { PickDebugState } from '@/components/PickDebugHUD';
 import ModelHistory from '@/components/ModelHistory';
 import { loadGLB, LoadProgress } from '@/lib/glbLoader';
-import { generateSceneTree, TreeNode, getNodePath, findNodeById } from '@/lib/sceneGraph';
+import { generateSceneTree, TreeNode, findNodeById, getNodePath } from '@/lib/sceneGraph';
 import { SelectionManager } from '@/lib/selectionManager';
 import { disposeOldModel, calculateModelStats, ModelStats as ModelStatsType } from '@/lib/modelManager';
 import { saveModelToHistory } from '@/lib/historyManager';
@@ -29,6 +29,7 @@ import { AnnotationRenderer } from '@/lib/annotationRenderer';
 import { MeasureTool } from '@/lib/measureTool';
 import { MVPManager } from '@/lib/mvpManager';
 import { useToolManager } from '@/hooks/useToolManager';
+import { resolveBusinessNode } from '@/lib/businessNodeResolver';
 
 export default function Home() {
   const [loadedScene, setLoadedScene] = useState<THREE.Group | null>(null);
@@ -214,7 +215,7 @@ export default function Home() {
 
     // 展开到该节点
     if (selectedNodes.length > 0) {
-      const path = getNodePath(tree, selectedNodes[0].id);
+      const path = getNodePath(tree, selectedNodes[0].id); // 来自 sceneGraph
       if (path) {
         const newExpandedIds = new Set(expandedNodeIds);
         for (const pathNode of path) {
@@ -292,25 +293,45 @@ export default function Home() {
     // 普通模式：选择构件
     console.log('[Home] handlePickObject called with result:', pickResult);
     
-    // 更新 Debug HUD
-    if (debugInfo) {
-      setPickDebugState(debugInfo);
-    }
-    
     if (!pickResult) {
       console.log('[Home] pickResult is null');
       handleClearSelection();
       return;
     }
 
-    if (!pickResult.node) {
-      console.log('[Home] pickResult.node is null');
+    // 业务节点提升：跳过 Mesh_/Node_/Scene，找到业务命名节点
+    const hitMesh = pickResult.mesh;
+    const selectedBusinessNode = resolveBusinessNode(hitMesh);
+    const hitMeshName = hitMesh.name;
+    const selectedNodeName = selectedBusinessNode.name;
+    
+    console.log('[Home] hitMesh:', hitMeshName, 'selectedNode:', selectedNodeName);
+    // 业务节点路径已在 resolveBusinessNode 中输出
+
+    // 在树中查找对应的业务节点
+    if (!sceneTreeRef.current) {
+      console.log('[Home] sceneTree is null');
       handleClearSelection();
       return;
     }
 
-    console.log('[Home] Selecting node:', pickResult.node.id, pickResult.node.name);
-    handleSelectNode(pickResult.node.id, false);
+    const treeNode = findNodeById(sceneTreeRef.current, selectedBusinessNode.uuid);
+    if (!treeNode) {
+      console.log('[Home] tree node not found for uuid:', selectedBusinessNode.uuid);
+      handleClearSelection();
+      return;
+    }
+
+    // 更新 Debug HUD
+    const updatedDebugInfo = {
+      ...debugInfo,
+      hitMeshName,
+      selectedNodeName,
+    };
+    setPickDebugState(updatedDebugInfo);
+
+    console.log('[Home] Selecting tree node:', treeNode.id, treeNode.name);
+    handleSelectNode(treeNode.id, false);
   }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleClearSelection = useCallback(() => {
