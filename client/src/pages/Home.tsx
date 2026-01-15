@@ -30,6 +30,7 @@ import { MeasureTool } from '@/lib/measureTool';
 import { MVPManager } from '@/lib/mvpManager';
 import { useToolManager } from '@/hooks/useToolManager';
 import { resolveBusinessNode } from '@/lib/businessNodeResolver';
+import { PickInfoCard, PickInfoData } from '@/components/PickInfoCard';
 
 export default function Home() {
   const [loadedScene, setLoadedScene] = useState<THREE.Group | null>(null);
@@ -64,7 +65,9 @@ export default function Home() {
   const [stableKeyMap, setStableKeyMap] = useState<Map<THREE.Object3D, any> | null>(null);
   const [showEventTab, setShowEventTab] = useState(false);
   const [showStatePanel, setShowStatePanel] = useState(false);
-
+  const [pickInfoVisible, setPickInfoVisible] = useState(false);
+  const [pickInfoData, setPickInfoData] = useState<PickInfoData | null>(null);
+  const [pickInfoPinned, setPickInfoPinned] = useState(false);
 
   const viewerRef = useRef<Viewer3DInstance | null>(null);
   const selectionManagerRef = useRef<SelectionManager | null>(null);
@@ -333,6 +336,20 @@ export default function Home() {
     setPickDebugState(updatedDebugInfo);
 
     handleSelectNode(pickResult.node.id, false);
+
+    // 更新 Pick Info Card
+    if (!pickInfoPinned) {
+      const infoData: PickInfoData = {
+        selectedName: pickResult.node.name,
+        hitMeshName: hitMeshName,
+        uuid: pickResult.mesh.uuid,
+        triangles: modelStats?.triangles,
+        meshes: modelStats?.meshes,
+        worldPos: pickResult.point.clone(),
+      };
+      setPickInfoData?.(infoData);
+      setPickInfoVisible?.(true);
+    }
   }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
 
   const handleClearSelection = useCallback(() => {
