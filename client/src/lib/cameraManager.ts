@@ -25,6 +25,7 @@ export class CameraManager {
   private animationId: number | null = null;
   private startTime: number = 0;
   private prevCameraState: CameraState | null = null;
+  private focusToken: number = 0; // 防竞态
 
   // 距离限制（防爆参数）
   private MIN_DISTANCE = 0.1;
@@ -56,14 +57,23 @@ export class CameraManager {
   }
 
   /**
-   * 计算对象的世界空间包围盒
+   * 计算对象的世界空间包围盒（带诊断日志）
    */
   private getWorldBoundingBox(object: THREE.Object3D): THREE.Box3 {
+    console.log('[focus] selected', { uuid: object.uuid, name: object.name, type: object.type });
+    
     this.updateWorldMatrix(object);
     
     const box = new THREE.Box3();
+    let meshCount = 0;
+    let positionCount = 0;
+    
     object.traverse((child) => {
       if (child instanceof THREE.Mesh && child.geometry) {
+        meshCount++;
+        const posAttr = child.geometry.attributes?.position;
+        if (posAttr) positionCount += posAttr.count;
+        
         child.geometry.computeBoundingBox();
         const localBox = child.geometry.boundingBox;
         if (localBox) {
@@ -74,15 +84,17 @@ export class CameraManager {
         }
       }
     });
+    
+    console.log('[focus] geometry', { meshCount, positionCount, hasBbox: !box.isEmpty(), matrixWorldNaN: !isFinite(object.matrixWorld.elements[0]) });
     return box;
   }
 
   /**
-   * 校验包围盒是否有效
+   * 校验包围盒是否有效（带详细日志）
    */
   private isValidBoundingBox(box: THREE.Box3): { valid: boolean; reason?: string } {
-    // 检查是否为空
     if (box.isEmpty()) {
+      console.log('[focus] validation failed: EMPTY_BOX');
       return { valid: false, reason: '该节点无有效几何体' };
     }
 
@@ -90,20 +102,36 @@ export class CameraManager {
     const center = box.getCenter(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
 
-    // 检查中心点是否有效
+    console.log('[focus] bbox', {
+      isEmpty: box.isEmpty(),
+      min: { x: box.min.x, y: box.min.y, z: box.min.z },
+      max: { x: box.max.x, y: box.max.y, z: box.max.z },
+      size: { x: size.x, y: size.y, z: size.z },
+      center: { x: center.x, y: center.y, z: center.z },
+      maxDim,
+    });
+
     if (!isFinite(center.x) || !isFinite(center.y) || !isFinite(center.z)) {
+      console.log('[focus] validation failed: NAN_CENTER');
       return { valid: false, reason: '包围盒中心点无效' };
     }
 
-    // 检查尺寸是否在合理范围
+    if (!isFinite(size.x) || !isFinite(size.y) || !isFinite(size.z)) {
+      console.log('[focus] validation failed: NAN_SIZE');
+      return { valid: false, reason: '包围盒尺寸无效' };
+    }
+
     if (maxDim < this.MIN_BBOX_SIZE) {
+      console.log('[focus] validation failed: ZERO_SIZE');
       return { valid: false, reason: '对象过小，无法聚焦' };
     }
 
     if (maxDim > this.MAX_BBOX_SIZE) {
+      console.log('[focus] validation failed: HUGE_SIZE');
       return { valid: false, reason: '对象过大，无法聚焦' };
     }
 
+    console.log('[focus] validation passed');
     return { valid: true };
   }
 
@@ -221,9 +249,17 @@ export class CameraManager {
 
       // 检查是否能看到目标
       if (!this.canSeeTarget(center, distance)) {
+        console.log('[focus] failed: cannot see target');
         toast.warning('聚焦位置异常，已回滚');
         return;
       }
+
+      console.log('[focus] camera params', { distance, near: this.camera.near, far: this.camera.far });
+      console.log('[focus] camera move', {
+        prevPos: { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z },
+        nextPos: { x: newPos.x, y: newPos.y, z: newPos.z },
+        target: { x: center.x, y: center.y, z: center.z },
+      });
 
       // 更新相机位置
       this.camera.position.copy(newPos);
@@ -236,8 +272,9 @@ export class CameraManager {
       this.camera.updateProjectionMatrix();
 
       this.controls.update();
+      console.log('[focus] success');
     } catch (error) {
-      console.error('聚焦失败:', error);
+      console.error('[focus] error', error);
       toast.error('聚焦失败，已回滚到上一视角');
       this.restoreCameraState(prevState);
     }
@@ -247,6 +284,8 @@ export class CameraManager {
    * 聚焦到对象（带平滑过渡）- 带防爆逻辑
    */
   frameObjectSmooth(object: THREE.Object3D, options: CameraFrameOptions = {}): void {
+    // 防竞态：生成新 token
+    const token = ++this.focusToken;
     this.cancelAnimation();
     const { duration = 400, padding = 1.2 } = options;
 
