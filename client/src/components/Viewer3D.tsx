@@ -72,19 +72,10 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, sceneTree, onReady, onPickOb
     // 创建 CSS2DRenderer（用于距离标签等）
     const labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(width, height);
-    Object.assign(labelRenderer.domElement.style, {
-      position: 'absolute',
-      left: '0',
-      top: '0',
-      width: '100%',
-      height: '100%',
-      pointerEvents: 'none',
-      zIndex: '9999',
-    });
-    console.log('[CSS2D] domElement:', labelRenderer.domElement);
-    console.log('[CSS2D] mounted to:', labelRenderer.domElement.parentElement);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none'; // 重要：不拦截 pointer 事件
     container.appendChild(labelRenderer.domElement);
-    console.log('[CSS2D] after append, parentElement:', labelRenderer.domElement.parentElement);
 
     // 创建控制器
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -352,7 +343,6 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, sceneTree, onReady, onPickOb
       requestAnimationFrame(animate);
       controls.update();
       renderer.render(mainScene, camera);
-      labelRenderer.render(mainScene, camera);
     };
     animate();
 
@@ -363,8 +353,6 @@ const Viewer3D: React.FC<Viewer3DProps> = ({ scene, sceneTree, onReady, onPickOb
       camera.aspect = newWidth / newHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(newWidth, newHeight);
-      labelRenderer.setSize(newWidth, newHeight);
-      console.log('[CSS2D] resize:', newWidth, 'x', newHeight);
     };
 
     window.addEventListener('resize', handleResize);
