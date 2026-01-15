@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { X, Pin } from 'lucide-react';
 
 export interface PickInfoData {
   selectedName: string;
@@ -21,6 +20,10 @@ interface PickInfoCardProps {
   onTogglePin: () => void;
 }
 
+/**
+ * 浮动标签卡 - 使用 CSS2DObject 实现屏幕空间卡片
+ * 必须与 CSS2DRenderer 配合使用
+ */
 export const PickInfoCard: React.FC<PickInfoCardProps> = ({
   scene,
   visible,
@@ -30,101 +33,106 @@ export const PickInfoCard: React.FC<PickInfoCardProps> = ({
   onTogglePin,
 }) => {
   const css2dObjectRef = useRef<CSS2DObject | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const elementRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!scene) return;
 
     // 创建 CSS2DObject（只创建一次）
     if (!css2dObjectRef.current) {
-      const container = document.createElement('div');
-      container.style.width = '240px';
-      container.style.padding = '10px';
-      container.style.backgroundColor = 'rgba(15, 20, 25, 0.9)';
-      container.style.border = '1px solid #00d9ff';
-      container.style.borderRadius = '8px';
-      container.style.fontSize = '12px';
-      container.style.color = '#e0e0e0';
-      container.style.fontFamily = 'monospace';
-      container.style.pointerEvents = 'none';
-      container.style.userSelect = 'none';
-      container.style.lineHeight = '1.4';
+      const el = document.createElement('div');
+      el.style.cssText = `
+        width: 240px;
+        padding: 10px;
+        background: rgba(7, 18, 26, 0.95);
+        border: 1px solid #00e5ff;
+        border-radius: 8px;
+        font-size: 12px;
+        color: #8ff;
+        font-family: monospace;
+        pointer-events: auto;
+        user-select: none;
+        line-height: 1.4;
+        box-shadow: 0 4px 12px rgba(0, 229, 255, 0.2);
+      `;
 
-      const css2dObj = new CSS2DObject(container);
+      const css2dObj = new CSS2DObject(el);
       css2dObj.position.set(0, 0, 0);
       scene.add(css2dObj);
       css2dObjectRef.current = css2dObj;
-      containerRef.current = container;
+      elementRef.current = el;
     }
 
     // 更新内容和位置
-    if (visible && data && containerRef.current) {
+    if (visible && data && elementRef.current) {
       const { selectedName, hitMeshName, uuid, triangles, meshes, worldPos } = data;
 
-      // 计算自适应偏移（基于模型大小）
-      const offsetDistance = 0.15; // 默认 0.15m
+      // 计算自适应偏移（沿 y 轴向上）
+      const offsetDistance = 0.15;
       const offsetPos = worldPos.clone().add(new THREE.Vector3(0, offsetDistance, 0));
 
       css2dObjectRef.current.position.copy(offsetPos);
 
       // 构建卡片内容
-      const content = `
-        <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px; row-gap: 4px;">
-          <span style="color: #00d9ff;">Name:</span>
-          <span>${selectedName}</span>
-          
-          <span style="color: #00d9ff;">Hit Mesh:</span>
-          <span>${hitMeshName}</span>
-          
-          <span style="color: #00d9ff;">UUID:</span>
-          <span style="word-break: break-all; font-size: 10px;">${uuid.substring(0, 12)}...</span>
-          
-          ${triangles !== undefined ? `
-            <span style="color: #00d9ff;">Triangles:</span>
-            <span>${triangles}</span>
-          ` : ''}
-          
-          ${meshes !== undefined ? `
-            <span style="color: #00d9ff;">Meshes:</span>
-            <span>${meshes}</span>
-          ` : ''}
-          
-          <span style="color: #00d9ff;">World Pos:</span>
-          <span>${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)}, ${worldPos.z.toFixed(2)}</span>
-        </div>
+      let content = `<div style="display: grid; grid-template-columns: auto 1fr; gap: 8px; row-gap: 4px;">
+        <span style="color: #00e5ff;">Name:</span>
+        <span>${selectedName}</span>
         
-        <div style="margin-top: 8px; display: flex; gap: 4px; justify-content: flex-end;">
-          <button id="pin-btn" style="
-            background: ${isPinned ? '#00d9ff' : 'transparent'};
-            border: 1px solid #00d9ff;
-            color: ${isPinned ? '#0f1419' : '#00d9ff'};
-            padding: 2px 6px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 11px;
-            font-family: monospace;
-          ">📌</button>
-          <button id="close-btn" style="
-            background: transparent;
-            border: 1px solid #ff6b6b;
-            color: #ff6b6b;
-            padding: 2px 6px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 11px;
-            font-family: monospace;
-          ">×</button>
-        </div>
-      `;
+        <span style="color: #00e5ff;">Hit:</span>
+        <span>${hitMeshName}</span>
+        
+        <span style="color: #00e5ff;">UUID:</span>
+        <span style="word-break: break-all; font-size: 10px;">${uuid.substring(0, 12)}...</span>`;
 
-      containerRef.current.innerHTML = content;
+      if (triangles !== undefined) {
+        content += `
+        <span style="color: #00e5ff;">Tri:</span>
+        <span>${triangles}</span>`;
+      }
 
-      // 绑定按钮事件（需要 pointer-events: auto 才能点击）
-      const pinBtn = containerRef.current.querySelector('#pin-btn') as HTMLButtonElement;
-      const closeBtn = containerRef.current.querySelector('#close-btn') as HTMLButtonElement;
+      if (meshes !== undefined) {
+        content += `
+        <span style="color: #00e5ff;">Mesh:</span>
+        <span>${meshes}</span>`;
+      }
+
+      content += `
+        <span style="color: #00e5ff;">Pos:</span>
+        <span>${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)}, ${worldPos.z.toFixed(2)}</span>
+      </div>
+      
+      <div style="margin-top: 8px; display: flex; gap: 4px; justify-content: flex-end;">
+        <button id="pin-btn" style="
+          background: ${isPinned ? '#00e5ff' : 'transparent'};
+          border: 1px solid #00e5ff;
+          color: ${isPinned ? '#0f1419' : '#00e5ff'};
+          padding: 2px 6px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 11px;
+          font-family: monospace;
+          transition: all 0.2s;
+        ">📌</button>
+        <button id="close-btn" style="
+          background: transparent;
+          border: 1px solid #ff6b6b;
+          color: #ff6b6b;
+          padding: 2px 6px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 11px;
+          font-family: monospace;
+          transition: all 0.2s;
+        ">×</button>
+      </div>`;
+
+      elementRef.current.innerHTML = content;
+
+      // 绑定按钮事件
+      const pinBtn = elementRef.current.querySelector('#pin-btn') as HTMLButtonElement;
+      const closeBtn = elementRef.current.querySelector('#close-btn') as HTMLButtonElement;
 
       if (pinBtn) {
-        pinBtn.style.pointerEvents = 'auto';
         pinBtn.onclick = (e) => {
           e.stopPropagation();
           onTogglePin();
@@ -132,7 +140,6 @@ export const PickInfoCard: React.FC<PickInfoCardProps> = ({
       }
 
       if (closeBtn) {
-        closeBtn.style.pointerEvents = 'auto';
         closeBtn.onclick = (e) => {
           e.stopPropagation();
           onClose();
@@ -140,8 +147,8 @@ export const PickInfoCard: React.FC<PickInfoCardProps> = ({
       }
 
       css2dObjectRef.current.visible = true;
-    } else if (containerRef.current) {
-      css2dObjectRef.current!.visible = false;
+    } else if (css2dObjectRef.current) {
+      css2dObjectRef.current.visible = false;
     }
   }, [scene, visible, data, isPinned, onClose, onTogglePin]);
 
