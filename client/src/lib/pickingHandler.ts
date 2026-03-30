@@ -62,7 +62,7 @@ export class PickingHandler {
     const tool = this.toolManager.getTool();
 
     switch (tool) {
-      case 'NONE':
+      case 'SELECT':
         // 普通选择模式
         this.handlers.onSelect?.(context);
         break;
@@ -106,3 +106,4 @@ export function getPickingHandler(): PickingHandler {
   }
   return pickingHandlerInstance;
 }
+
