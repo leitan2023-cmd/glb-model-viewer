@@ -18,10 +18,11 @@ const UploadPanel: React.FC<UploadPanelProps> = ({
   const [isDragging, setIsDragging] = useState(false);
 
   const handleFileSelect = (file: File) => {
-    if (file.name.toLowerCase().endsWith('.glb')) {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.glb') || lowerName.endsWith('.gltf')) {
       onFileSelected?.(file);
     } else {
-      alert('请选择 GLB 格式的文件');
+      alert('请选择 GLB 或 GLTF 格式的文件');
     }
   };
 
@@ -52,7 +53,6 @@ const UploadPanel: React.FC<UploadPanelProps> = ({
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-
     const file = e.dataTransfer.files?.[0];
     if (file) {
       handleFileSelect(file);
@@ -74,20 +74,18 @@ const UploadPanel: React.FC<UploadPanelProps> = ({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".glb"
+        accept=".glb,.gltf"
         onChange={handleFileInputChange}
         className="hidden"
         disabled={isLoading}
       />
-
       <div className="flex flex-col items-center gap-3">
         <Upload className="w-8 h-8 text-accent" />
         <div>
-          <p className="text-foreground font-medium">拖拽 GLB 文件到此处</p>
+          <p className="text-foreground font-medium">拖拽 GLB/GLTF 文件到此处</p>
           <p className="text-sm text-muted-foreground mt-1">或点击选择文件</p>
         </div>
       </div>
-
       {isLoading && progress > 0 && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 rounded-lg">
           <Progress value={progress} className="w-24 mb-2" />
@@ -99,3 +97,4 @@ const UploadPanel: React.FC<UploadPanelProps> = ({
 };
 
 export default UploadPanel;
+
