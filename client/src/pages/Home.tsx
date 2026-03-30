@@ -1,10 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { RotateCcw, Maximize2, X, Eye, EyeOff, Upload } from 'lucide-react';
+import { RotateCcw, Maximize2, X, Upload } from 'lucide-react';
 import Viewer3D, { Viewer3DInstance } from '@/components/Viewer3D';
 import { PickResult } from '@/lib/pickingUtils';
 import SceneTree from '@/components/SceneTree';
@@ -21,12 +20,8 @@ import { disposeOldModel, calculateModelStats, ModelStats as ModelStatsType } fr
 import { saveModelToHistory } from '@/lib/historyManager';
 import EventEditor from '@/components/EventEditor';
 import EventList from '@/components/EventList';
-import StatePanel from '@/components/StatePanel';
-import { generateStableKeyMap, getStableKey, findMeshByStableKey, generateModelId } from '@/lib/stableKeyManager';
-import { getModelState, updatePartState, importModelState } from '@/lib/stateStore';
-import { EventRecord, createEventRecord, getEventsByModelId, updateEventRecord } from '@/lib/eventStore';
-import { AnnotationRenderer } from '@/lib/annotationRenderer';
-import { MeasureTool } from '@/lib/measureTool';
+import { generateStableKeyMap } from '@/lib/stableKeyManager';
+import { EventRecord } from '@/lib/eventStore';
 import { MVPManager } from '@/lib/mvpManager';
 import { useToolManager } from '@/hooks/useToolManager';
 import { resolveBusinessNode } from '@/lib/businessNodeResolver';
@@ -54,17 +49,12 @@ export default function Home() {
   const [modelStats, setModelStats] = useState<ModelStatsType | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [mainModelId, setMainModelId] = useState<string | null>(null);
-  const [currentModelState, setCurrentModelState] = useState<any>(null);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [maintenanceMode, setMaintenanceMode] = useState(false);
-  const [measureMode, setMeasureMode] = useState(false);
   const { toolState, setTool, getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints } = useToolManager();
   const [eventEditorOpen, setEventEditorOpen] = useState(false);
   const [eventEditorData, setEventEditorData] = useState<any>(null);
-  const [stableKeyMap, setStableKeyMap] = useState<Map<THREE.Object3D, any> | null>(null);
   const [showEventTab, setShowEventTab] = useState(false);
-  const [showStatePanel, setShowStatePanel] = useState(false);
   const [pickInfoVisible, setPickInfoVisible] = useState(false);
   const [pickInfoData, setPickInfoData] = useState<PickInfoData | null>(null);
   const [pickInfoPinned, setPickInfoPinned] = useState(false);
@@ -74,11 +64,7 @@ export default function Home() {
   const treeContainerRef = useRef<HTMLDivElement>(null);
   const sceneTreeRef = useRef<TreeNode | null>(null);
   const loadedSceneRef = useRef<THREE.Group | null>(null);
-  const annotationRendererRef = useRef<any>(null);
-  const measureToolRef = useRef<any>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const mvpManagerRef = useRef<MVPManager | null>(null);
-
 
   /**
    * 内部：加载模型的核心逻辑
@@ -105,7 +91,6 @@ export default function Home() {
       // 更新拾取管理器中的场景树
       if (viewerRef.current) {
         viewerRef.current.pickingManager.setScene(result.scene, tree);
-        // 重新聚焦到模型
         viewerRef.current.fitToModel();
       }
 
@@ -123,7 +108,7 @@ export default function Home() {
       console.error('加载失败:', error);
       throw error;
     }
-  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
+  }, []);
 
   /**
    * 处理文件选择（初次加载或替换）
@@ -136,6 +121,7 @@ export default function Home() {
       // 清理旧模型
       if (loadedSceneRef.current) {
         disposeOldModel(loadedSceneRef.current);
+        loadedSceneRef.current = null;
       }
 
       // 加载新模型
@@ -185,53 +171,55 @@ export default function Home() {
     const node = findNodeById(tree, nodeId);
     if (!node) return;
 
-    let newSelectedIds: Set<string>;
+    setSelectedNodeIds((prevIds) => {
+      let newSelectedIds: Set<string>;
 
-    if (ctrlKey) {
-      // Ctrl 点击：切换多选
-      newSelectedIds = new Set(selectedNodeIds);
-      if (newSelectedIds.has(nodeId)) {
-        newSelectedIds.delete(nodeId);
-      } else {
-        newSelectedIds.add(nodeId);
-      }
-    } else {
-      // 普通点击：单选
-      newSelectedIds = new Set([nodeId]);
-    }
-
-    setSelectedNodeIds(newSelectedIds);
-
-    // 获取所有选中的节点
-    const selectedNodes = Array.from(newSelectedIds)
-      .map((id) => findNodeById(tree, id))
-      .filter((n) => n !== null) as TreeNode[];
-
-    // 更新选择管理器
-    selectionManagerRef.current.clearSelection();
-    for (const selectedNode of selectedNodes) {
-      selectionManagerRef.current.addToSelection(selectedNode);
-    }
-
-    // 更新 UI
-    setSelectedNode(selectedNodes[0] || null);
-
-    // 展开到该节点
-    if (selectedNodes.length > 0) {
-      const path = getNodePath(tree, selectedNodes[0].id); // 来自 sceneGraph
-      if (path) {
-        const newExpandedIds = new Set(expandedNodeIds);
-        for (const pathNode of path) {
-          newExpandedIds.add(pathNode.id);
+      if (ctrlKey) {
+        newSelectedIds = new Set(prevIds);
+        if (newSelectedIds.has(nodeId)) {
+          newSelectedIds.delete(nodeId);
+        } else {
+          newSelectedIds.add(nodeId);
         }
-        setExpandedNodeIds(newExpandedIds);
+      } else {
+        newSelectedIds = new Set([nodeId]);
       }
-    }
 
-    // 平滑聚焦到选中节点（仅当单选时）
-    if (newSelectedIds.size === 1) {
-      viewerRef.current.fitToObjectSmooth(node.object3D, 400);
-    }
+      // 获取所有选中的节点
+      const selectedNodes = Array.from(newSelectedIds)
+        .map((id) => findNodeById(tree, id))
+        .filter((n) => n !== null) as TreeNode[];
+
+      // 更新选择管理器
+      selectionManagerRef.current!.clearSelection();
+      for (const sn of selectedNodes) {
+        selectionManagerRef.current!.addToSelection(sn);
+      }
+
+      // 更新 UI
+      setSelectedNode(selectedNodes[0] || null);
+
+      // 展开到该节点
+      if (selectedNodes.length > 0) {
+        const path = getNodePath(tree, selectedNodes[0].id);
+        if (path) {
+          setExpandedNodeIds((prevExpanded) => {
+            const newExpandedIds = new Set(prevExpanded);
+            for (const pathNode of path) {
+              newExpandedIds.add(pathNode.id);
+            }
+            return newExpandedIds;
+          });
+        }
+      }
+
+      // 平滑聚焦到选中节点（仅当单选时）
+      if (newSelectedIds.size === 1) {
+        viewerRef.current!.fitToObjectSmooth(node.object3D, 400);
+      }
+
+      return newSelectedIds;
+    });
 
     // 滚动到该节点
     setTimeout(() => {
@@ -242,13 +230,12 @@ export default function Home() {
         element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }, 0);
-  }, [selectedNodeIds, expandedNodeIds]);
+  }, []);
 
   /**
    * 处理 3D 中的拾取
    */
   const handlePickObject = useCallback((pickResult: PickResult | null, debugInfo?: any) => {
-    // 运维模式：创建事件
     const tool = getTool();
 
     // 运维模式：创建事件
@@ -270,23 +257,20 @@ export default function Home() {
     }
 
     // 量测模式：添加测量点
-    // 量测模式：添加测量点
     if (tool === 'MEASURE_DISTANCE' && pickResult) {
       const pointCount = addMeasurePoint({
         x: pickResult.point.x,
         y: pickResult.point.y,
         z: pickResult.point.z,
       });
-      
+
       if (pointCount === 2) {
-        // 计算距离
         const points = getMeasurePoints();
         if (points.length === 2) {
           const p1 = new THREE.Vector3(points[0].x, points[0].y, points[0].z);
           const p2 = new THREE.Vector3(points[1].x, points[1].y, points[1].z);
           const distance = p1.distanceTo(p2);
           toast.success(`测量完成：${distance.toFixed(2)}m`);
-          // 清除测量点，准备下一次测量
           clearMeasurePoints();
         }
       }
@@ -294,40 +278,24 @@ export default function Home() {
     }
 
     // 普通模式：选择构件
-    console.log('[Home] handlePickObject called with result:', pickResult);
-    
-    if (!pickResult) {
-      console.log('[Home] pickResult is null');
+    if (!pickResult || !pickResult.node) {
       handleClearSelection();
       return;
     }
 
-    if (!pickResult.node) {
-      console.log('[Home] pickResult.node is null');
-      handleClearSelection();
-      return;
-    }
-
-    // 直接使用 pickResult.node（原来的逻辑）
-    console.log('[Home] Selecting node:', pickResult.node.id, pickResult.node.name);
-    
-    // 业务节点提升为可选增强（fallback）
     const hitMesh = pickResult.mesh;
     const hitMeshName = hitMesh.name;
     let selectedNodeName = pickResult.node.name;
-    
-    // 尝试提升到业务节点，失败则使用原节点
+
     try {
       const promotedNode = resolveBusinessNode(hitMesh);
       if (promotedNode && promotedNode !== hitMesh) {
         selectedNodeName = promotedNode.name;
-        console.log('[Home] promoted to business node:', selectedNodeName);
       }
-    } catch (e) {
-      console.log('[Home] promote failed, using original node');
+    } catch {
+      // 使用原始节点名
     }
 
-    // 更新 Debug HUD
     const updatedDebugInfo = {
       ...debugInfo,
       hitMeshName,
@@ -337,7 +305,6 @@ export default function Home() {
 
     handleSelectNode(pickResult.node.id, false);
 
-    // 更新 Pick Info Card
     if (!pickInfoPinned) {
       const infoData: PickInfoData = {
         selectedName: pickResult.node.name,
@@ -347,31 +314,29 @@ export default function Home() {
         meshes: modelStats?.meshes,
         worldPos: pickResult.point.clone(),
       };
-      setPickInfoData?.(infoData);
-      setPickInfoVisible?.(true);
+      setPickInfoData(infoData);
+      setPickInfoVisible(true);
     }
-  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
+  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints, handleSelectNode, pickInfoPinned, modelStats]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedNodeIds(new Set());
     setSelectedNode(null);
+    setPickInfoVisible(false);
+    setPickInfoData(null);
 
     if (selectionManagerRef.current) {
       selectionManagerRef.current.clearSelection();
     }
-  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
+  }, []);
 
   const handleResetView = useCallback(() => {
-    if (viewerRef.current) {
-      viewerRef.current.resetView();
-    }
-  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
+    viewerRef.current?.resetView();
+  }, []);
 
   const handleFitModel = useCallback(() => {
-    if (viewerRef.current) {
-      viewerRef.current.fitToModel();
-    }
-  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
+    viewerRef.current?.fitToModel();
+  }, []);
 
   const handleToggleNodeExpanded = useCallback((nodeId: string) => {
     setExpandedNodeIds((prev) => {
@@ -383,17 +348,16 @@ export default function Home() {
       }
       return newSet;
     });
-  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
+  }, []);
 
   const handleViewerReady = useCallback((viewer: Viewer3DInstance) => {
     viewerRef.current = viewer;
-    
-    // 仅在首次加载时调用 fitToModel
+
     if (loadedSceneRef.current && sceneTreeRef.current) {
       viewer.pickingManager.setScene(loadedSceneRef.current, sceneTreeRef.current);
       viewer.fitToModel();
     }
-  }, [getTool, addMeasurePoint, getMeasurePoints, clearMeasurePoints]);
+  }, []);
 
   const handleUploadClick = useCallback(() => {
     const input = document.createElement('input');
@@ -408,12 +372,13 @@ export default function Home() {
     input.click();
   }, [handleFileSelected]);
 
+  const isOpsMode = toolState.currentTool === 'OPS_ANNOTATE';
+  const isMeasureMode = toolState.currentTool === 'MEASURE_DISTANCE';
+
   return (
     <div className="w-screen h-screen flex flex-col bg-background">
-      {/* Debug HUD */}
       <PickDebugHUD state={pickDebugState} />
 
-      {/* 顶部工具条 */}
       <div className="h-16 bg-card border-b border-border flex items-center px-4 gap-3">
         <h1 className="text-lg font-bold text-foreground">GLB Model Viewer</h1>
         <Separator orientation="vertical" className="h-6" />
@@ -463,26 +428,22 @@ export default function Home() {
               </Button>
             )}
 
-            {loadedScene && (
-              <>
-                <Button
-                  size="sm"
-                  variant={maintenanceMode ? 'default' : 'outline'}
-                  onClick={() => setTool("OPS_ANNOTATE")}
-                  title="运维模式：点击模型创建事件"
-                >
-                  🔧 运维模式
-                </Button>
-                <Button
-                  size="sm"
-                  variant={measureMode ? 'default' : 'outline'}
-                  onClick={() => setTool("MEASURE_DISTANCE")}
-                  title="量测模式：点击两处测量距离"
-                >
-                  📏 量测
-                </Button>
-              </>
-            )}
+            <Button
+              size="sm"
+              variant={isOpsMode ? 'default' : 'outline'}
+              onClick={() => setTool(isOpsMode ? 'SELECT' : 'OPS_ANNOTATE')}
+              title="运维模式：点击模型创建事件"
+            >
+              运维模式
+            </Button>
+            <Button
+              size="sm"
+              variant={isMeasureMode ? 'default' : 'outline'}
+              onClick={() => setTool(isMeasureMode ? 'SELECT' : 'MEASURE_DISTANCE')}
+              title="量测模式：点击两处测量距离"
+            >
+              量测
+            </Button>
           </>
         )}
 
@@ -501,9 +462,7 @@ export default function Home() {
         )}
       </div>
 
-      {/* 主内容区域 */}
       <div className="flex-1 flex overflow-hidden">
-        {/* 左侧：结构树或上传面板 */}
         <div className="w-80 bg-card border-r border-border flex flex-col">
           {!loadedScene ? (
             <div className="flex-1 flex flex-col items-center justify-center p-6">
@@ -515,7 +474,6 @@ export default function Home() {
             </div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-              {/* 标签页：结构树 / 历史模型 / 事件记录 */}
               <div className="flex border-b border-border bg-background/50">
                 <button
                   onClick={() => { setShowHistory(false); setShowEventTab(false); }}
@@ -549,7 +507,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 内容区域 */}
               {!showHistory && !showEventTab ? (
                 <div
                   ref={treeContainerRef}
@@ -617,27 +574,40 @@ export default function Home() {
           )}
         </div>
 
-        {/* 右侧：3D 视窗 */}
         <div className="flex-1 bg-background relative pointer-events-auto">
           {!loadedScene ? (
             <div className="w-full h-full flex items-center justify-center text-muted-foreground">
               <div className="text-center">
-                <p className="text-lg mb-4">上传 GLB 文件开始</p>
+                <p className="text-lg mb-4">上传 GLB/GLTF 文件开始</p>
                 <p className="text-sm">支持拖拽或点击选择文件</p>
               </div>
             </div>
           ) : (
-            <Viewer3D
-              scene={loadedScene}
-              sceneTree={sceneTree}
-              onReady={handleViewerReady}
-              onPickObject={handlePickObject}
-            />
+            <>
+              <Viewer3D
+                scene={loadedScene}
+                sceneTree={sceneTree}
+                onReady={handleViewerReady}
+                onPickObject={handlePickObject}
+              />
+              {viewerRef.current && (
+                <PickInfoCard
+                  scene={viewerRef.current.scene}
+                  visible={pickInfoVisible}
+                  data={pickInfoData}
+                  isPinned={pickInfoPinned}
+                  onClose={() => {
+                    setPickInfoVisible(false);
+                    setPickInfoData(null);
+                  }}
+                  onTogglePin={() => setPickInfoPinned((prev) => !prev)}
+                />
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {/* 事件编辑弹窗 */}
       {eventEditorOpen && (
         <EventEditor
           open={eventEditorOpen}
@@ -669,3 +639,4 @@ export default function Home() {
     </div>
   );
 }
+
